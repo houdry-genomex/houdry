@@ -152,19 +152,33 @@ remote jobs, or make the GPU schedulable.
 
 # Current Implementation Status
 
-The preceding sections describe the long-term Houdry vision. The repository
-currently implements only the Phase 1 GPU discovery and inventory-join slice:
+The preceding sections describe the long-term Houdry vision.
 
-- a Go CLI for Linux, macOS, and Windows build targets
-- best-effort local GPU detection through available OS/vendor tools
-- a normalized GPU inventory
-- one-shot inventory submission to a basic HTTP server
-- a shared-token option, JSON file storage, dashboard, and node listing
-- server-hosted installers and cross-compiled binary distribution
+**Phase 1 (implemented):** local GPU discovery, one-shot inventory join, control
+plane listing/dashboard, cross-platform installers.
 
-The agentic workspace, agent execution, knowledge retrieval, model inference,
-scheduling, remote execution, persistent node agents, and production security
-described above are vision items and are not implemented in this repository.
+**Phase 2 (implemented prototype):** persistent node agent (`houdry node join`),
+heartbeat with READY/BUSY/OFFLINE, job submit/claim/result, and `gpu.smoke`
+execution over the same HTTP APIs used for local and remote nodes.
 
-The exact Phase 1 behavior and limitations are documented in
-[`docs/GPU-discovery.md`](docs/GPU-discovery.md).
+**Phase 3 (implemented prototype):** multi-node registration, normalized
+static/dynamic resource profiles (physical GPUs ≠ runtime probes),
+framework-agnostic workload requirements, first-fit VRAM-aware scheduler,
+job queue, DRAINING/leave, offline exclusion, and cluster visibility
+(`houdry node list`, dashboard, `/v1/cluster`).
+
+**Phase 5 (implemented prototype):** intelligent model & resource routing —
+heuristic task profiles (modality/complexity), runtime-agnostic model catalog,
+scoring of (model, node) pairs (prefer loaded + complexity-appropriate models),
+`POST /v1/route`, and `houdry route --prompt … [--execute]`. Vision/OCR/PDF
+pipelines are detected and deferred.
+
+Still not implemented: agentic workspace, RAG, OpenHands, OCR/vision chains,
+and durable multi-tenant security.
+
+Exact contracts:
+- [`docs/GPU-discovery.md`](docs/GPU-discovery.md)
+- [`docs/Phase-2-node-agent.md`](docs/Phase-2-node-agent.md)
+- [`docs/Phase-3-scheduling.md`](docs/Phase-3-scheduling.md)
+- [`docs/Phase-4-model-runtime.md`](docs/Phase-4-model-runtime.md)
+- [`docs/Phase-5-routing.md`](docs/Phase-5-routing.md)

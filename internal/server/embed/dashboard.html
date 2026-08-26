@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="8">
-  <title>Houdry — joined GPUs</title>
+  <meta http-equiv="refresh" content="5">
+  <title>Houdry cluster</title>
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
@@ -20,45 +20,140 @@
     }
     h1 { margin: 0; font-size: 20px; letter-spacing: 0.04em; }
     .sub { color: #8b98a8; margin-top: 4px; }
+    .stats { margin-top: 10px; color: #c5d0dc; font-size: 13px; }
     main { padding: 20px 28px 48px; }
-    .node {
+    h2 { font-size: 14px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b98a8; }
+    .node, .jobs {
       background: #121821;
       border: 1px solid #1f2733;
       border-radius: 10px;
       padding: 16px 18px;
       margin-bottom: 16px;
     }
-    .node h2 { margin: 0 0 6px; font-size: 16px; }
+    .node h3 { margin: 0 0 6px; font-size: 16px; }
     .meta { color: #8b98a8; font-size: 12px; }
     table { width: 100%; border-collapse: collapse; margin-top: 12px; }
     th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #1f2733; }
     th { color: #8b98a8; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
-    .empty { color: #8b98a8; padding: 40px 0; }
+    .empty { color: #8b98a8; padding: 24px 0; }
     code { background: #1a2230; padding: 2px 6px; border-radius: 4px; }
     .install { margin-top: 12px; color: #8b98a8; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+    .ready { background: #143528; color: #6ddea8; }
+    .busy { background: #3a2a10; color: #f0c674; }
+    .draining { background: #2a2438; color: #c4b5fd; }
+    .offline { background: #3a1515; color: #f07178; }
+    .joined { background: #1a2230; color: #8b98a8; }
   </style>
 </head>
 <body>
   <header>
-    <h1>Houdry</h1>
-    <div class="sub">Phase 1 GPU fabric · {{.Version}} · {{.Server}}</div>
+    <h1>Houdry cluster</h1>
+    <div class="sub">Phase 5 · {{.Version}} · {{.Server}}</div>
+    <div class="stats">
+      Nodes: {{.Summary.Nodes}} ·
+      GPUs: {{.Summary.GPUs}} ·
+      Available VRAM: {{bytes .Summary.AvailableVRAM}} ·
+      Ready: {{.Summary.ReadyNodes}} ·
+      Queued jobs: {{.Summary.QueuedJobs}}
+    </div>
     <div class="install">
-      Linux/macOS: <code>curl -fsSL {{.Server}}/install.sh | sh</code><br>
-      Windows: <code>irm {{.Server}}/install.ps1 | iex</code>
+      Agent: <code>houdry node join --server {{.Server}}</code><br>
+      Cluster: <code>houdry node list --server {{.Server}}</code><br>
+      Job: <code>houdry route --prompt "Hello" --execute --wait --server {{.Server}}</code>
     </div>
   </header>
   <main>
+    <h2>Nodes</h2>
     {{if not .Nodes}}
-      <p class="empty">No nodes have joined yet. Install Houdry on a GPU machine, then run <code>houdry gpu join</code>.</p>
+      <p class="empty">No nodes yet. Start an agent with <code>houdry node join --server {{.Server}}</code>.</p>
     {{else}}
-      {{range .Nodes}}
       <section class="node">
-        <h2>{{.Host.Hostname}}</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Node</th>
+              <th>Status</th>
+              <th>GPU</th>
+              <th>VRAM</th>
+              <th>Runtimes</th>
+              <th>Last seen</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Nodes}}
+            <tr>
+              <td>
+                <strong>{{.Host.Hostname}}</strong><br>
+                <span class="meta">{{.NodeID}}</span>
+                {{if .RemoteIP}}<br><span class="meta">{{.RemoteIP}}</span>{{end}}
+              </td>
+              <td><span class="badge {{statusClass .Status}}">{{.Status}}</span></td>
+              <td>
+                {{if .Resources.Static.GPUs}}
+                  {{(index .Resources.Static.GPUs 0).Name}}{{if gt (len .Resources.Static.GPUs) 1}} (+{{len .Resources.Static.GPUs}}){{end}}
+                {{else if .GPUs}}
+                  {{(index .GPUs 0).Name}}
+                {{else}}
+                  —
+                {{end}}
+              </td>
+              <td>
+                {{if .Resources.Static.GPUs}}{{bytes (index .Resources.Static.GPUs 0).MemoryTotalBytes}}
+                {{else if .GPUs}}{{bytes (index .GPUs 0).MemoryTotalBytes}}
+                {{else}}—{{end}}
+              </td>
+              <td>
+                {{if .Runtimes}}{{range $i, $r := .Runtimes}}{{if $i}}, {{end}}{{$r}}{{end}}{{else}}—{{end}}
+              </td>
+              <td>{{time .LastSeen}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </section>
+      {{range $node := .Nodes}}
+      <section class="node">
+        <h3>{{$node.Host.Hostname}} <span class="badge {{statusClass $node.Status}}">{{$node.Status}}</span></h3>
         <div class="meta">
-          {{.Host.OS}}/{{.Host.Arch}} · node {{.NodeID}} · {{len .GPUs}} GPU(s)<br>
-          joined {{time .JoinedAt}} · last seen {{time .LastSeen}}
+          {{$node.Host.OS}}/{{$node.Host.Arch}} · agent {{$node.AgentVersion}} ·
+          {{len $node.Resources.Static.GPUs}} physical GPU(s)
+          {{if $node.CurrentJobID}} · job {{$node.CurrentJobID}}{{end}}
+          {{if $node.Resources.Static.CPUCores}} · {{$node.Resources.Static.CPUCores}} CPU · {{bytes $node.Resources.Static.MemoryTotalBytes}} RAM{{end}}
         </div>
-        {{if .GPUs}}
+        {{if $node.Resources.Static.GPUs}}
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Vendor</th>
+              <th>Name</th>
+              <th>Total VRAM</th>
+              <th>Available</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range $i, $g := $node.Resources.Static.GPUs}}
+            <tr>
+              <td><code>{{$g.ID}}</code></td>
+              <td>{{$g.Vendor}}</td>
+              <td>{{$g.Name}}</td>
+              <td>{{bytes $g.MemoryTotalBytes}}</td>
+              <td>
+                {{if lt $i (len $node.Resources.Dynamic.GPUs)}}{{bytes (index $node.Resources.Dynamic.GPUs $i).MemoryAvailableBytes}}{{else}}—{{end}}
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+        {{else if $node.GPUs}}
         <table>
           <thead>
             <tr>
@@ -72,7 +167,7 @@
             </tr>
           </thead>
           <tbody>
-            {{range .GPUs}}
+            {{range $node.GPUs}}
             <tr>
               <td>{{.Index}}</td>
               <td>{{.Vendor}}</td>
@@ -85,12 +180,45 @@
             {{end}}
           </tbody>
         </table>
-        {{else}}
-          <p class="meta">No GPUs reported by this node.</p>
         {{end}}
       </section>
       {{end}}
     {{end}}
+
+    <h2>Jobs</h2>
+    <section class="jobs">
+      {{if not .Jobs}}
+        <p class="empty">No jobs yet. Submit with <code>houdry job submit gpu.smoke --wait</code>.</p>
+      {{else}}
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Node</th>
+              <th>Requirements</th>
+              <th>Created</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Jobs}}
+            <tr>
+              <td>{{.ID}}</td>
+              <td>{{.Type}}</td>
+              <td>{{.Status}}</td>
+              <td>{{.NodeID}}</td>
+              <td>
+                {{if .Requirements.GPURequired}}GPU{{end}}
+                {{if .Requirements.MinVRAMBytes}} ≥ {{bytes .Requirements.MinVRAMBytes}}{{end}}
+              </td>
+              <td>{{time .CreatedAt}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      {{end}}
+    </section>
   </main>
 </body>
 </html>

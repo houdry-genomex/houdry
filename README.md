@@ -1,16 +1,22 @@
-# Houdry — Phase 1 GPU discovery and join
+# Houdry — private GPU fabric
 
-Houdry discovers GPUs on a machine and can submit one inventory snapshot to a
-Houdry server. Scheduling, remote execution, model serving, agents, and
-continuous monitoring are not implemented yet.
+Phase 1 discovers GPUs and can submit one inventory snapshot.
+Phase 2 adds a persistent **node agent**, **heartbeat**, and **GPU jobs**.
+Phase 3 adds **multi-node registration**, **resource profiles**, a **capability-aware scheduler**, **job queue**, and **drain/offline** handling.
+Phase 4 adds a pluggable **Model Runtime** (Ollama first), **model discovery**, and **`inference` jobs**.
+Phase 5 adds **intelligent model & resource routing** (task profile → catalog → best model+node).
 
-Full Phase 1 details: [docs/GPU-discovery.md](docs/GPU-discovery.md)
+- Phase 1 details: [docs/GPU-discovery.md](docs/GPU-discovery.md)
+- Phase 2 details: [docs/Phase-2-node-agent.md](docs/Phase-2-node-agent.md)
+- Phase 3 details: [docs/Phase-3-scheduling.md](docs/Phase-3-scheduling.md)
+- Phase 4 details: [docs/Phase-4-model-runtime.md](docs/Phase-4-model-runtime.md)
+- Phase 5 details: [docs/Phase-5-routing.md](docs/Phase-5-routing.md)
 
 Repository: [houdry-genomex/houdry](https://github.com/houdry-genomex/houdry)
 
 ---
 
-## For friends: detect GPUs on your laptop
+## For friends: detect GPUs
 
 ### Linux / macOS
 
@@ -27,70 +33,70 @@ irm https://github.com/houdry-genomex/houdry/releases/latest/download/install.ps
 & "$HOME\.houdry\bin\houdry.exe" gpu detect
 ```
 
-Notes:
-
-- Install puts the binary in `~/.houdry/bin` (Windows: `%USERPROFILE%\.houdry\bin`).
-- The current shell may not see `houdry` until you export `PATH` or open a new terminal.
-- `gpu detect` only inspects the local machine. It does not send data to a server.
-
 ---
 
-## Join a Houdry server (optional)
+## Phase 2 milestone (one laptop)
 
-Someone must run the server first:
-
-```bash
-# from a machine that has the source / dist binaries
-make dist
-./bin/houdry serve --listen 0.0.0.0:18080 --binaries dist
-```
-
-Then each GPU machine:
+Same APIs for local and remote — no special local mode.
 
 ```bash
-export PATH="$HOME/.houdry/bin:$PATH"
-houdry gpu join --server http://HOST:18080
-houdry gpu list --server http://HOST:18080
-```
-
-Replace `HOST` with the real server IP or hostname (for example `127.0.0.1` on
-the same machine, or `192.168.1.20` on a LAN). Do not type the word `HOST`
-literally.
-
-With an optional shared token:
-
-```bash
-./bin/houdry serve --listen 0.0.0.0:18080 --binaries dist --token CHANGE_ME
-houdry gpu join --server http://HOST:18080 --token CHANGE_ME
-```
-
-Open `http://HOST:18080/` for the dashboard.
-
-Server-hosted install (while the server is running):
-
-```bash
-# Linux / macOS
-curl -fsSL http://HOST:18080/install.sh | sh
-
-# Windows PowerShell
-irm http://HOST:18080/install.ps1 | iex
-```
-
-Those installers save the server URL into `~/.houdry/config.json`, so
-`houdry gpu join` can omit `--server`.
-
----
-
-## Build from source
-
-Requires Go 1.23+.
-
-```bash
+# Terminal 1
 make build
-./bin/houdry gpu detect
+./bin/houdry serve --listen 0.0.0.0:18080
 
-make dist    # linux/darwin/windows × amd64/arm64 into dist/
-make test
+# Terminal 2
+./bin/houdry node join --server http://127.0.0.1:18080
+
+# Terminal 3
+./bin/houdry job submit gpu.smoke --server http://127.0.0.1:18080 --wait
+```
+
+Open `http://127.0.0.1:18080/` for the cluster dashboard (READY / BUSY / DRAINING / OFFLINE).
+
+---
+
+## Phase 3 milestone (multi-node LAN)
+
+```bash
+# Machine A — control plane
+./bin/houdry serve --listen 0.0.0.0:18080
+
+# Machine B / C — workers (only need the server URL)
+./bin/houdry node join --server http://<A-IP>:18080
+
+# Any host — cluster view + VRAM-aware submit
+./bin/houdry node list --server http://<A-IP>:18080
+./bin/houdry job submit gpu.smoke --server http://<A-IP>:18080 --min-vram-mb 6000 --wait
+```
+
+---
+
+## Phase 4 milestone (inference)
+
+Requires [Ollama](https://ollama.com) on the worker (or another Model Runtime later).
+
+```bash
+ollama pull tinyllama   # small model for ~4 GB VRAM
+
+./bin/houdry serve --listen 0.0.0.0:18080
+./bin/houdry node join --server http://127.0.0.1:18080
+./bin/houdry model list --server http://127.0.0.1:18080
+./bin/houdry job submit inference \
+  --server http://127.0.0.1:18080 \
+  --model tinyllama \
+  --prompt "Say hello from Houdry in one short sentence." \
+  --wait
+```
+
+---
+
+## Phase 5 milestone (routing)
+
+```bash
+./bin/houdry model catalog --server http://127.0.0.1:18080
+./bin/houdry route --prompt "Say hello from Houdry" --server http://127.0.0.1:18080
+./bin/houdry route --prompt "Say hello from Houdry" --execute --wait --server http://127.0.0.1:18080
+./bin/houdry route --prompt "Refactor this Go function and add tests" --execute --wait --server http://127.0.0.1:18080
 ```
 
 ---
@@ -101,47 +107,33 @@ make test
 houdry gpu detect [--json]
 houdry gpu join [--server URL] [--token TOKEN] [--json]
 houdry gpu list [--server URL] [--token TOKEN] [--json]
+houdry node join [--server URL] [--token TOKEN] [--interval DURATION]
+houdry node list [--server URL] [--token TOKEN] [--json]
+houdry node drain [--server URL] [--token TOKEN]
+houdry node leave [--server URL] [--token TOKEN]
+houdry model list [--server URL] [--token TOKEN] [--json]
+houdry model catalog [--server URL] [--token TOKEN] [--json]
+houdry route --prompt TEXT [--server URL] [--runtime NAME] [--require-model] [--execute] [--wait] [--json]
+houdry job submit gpu.smoke [--server URL] [--min-vram-mb N] [--wait] [--json]
+houdry job submit inference --model NAME --prompt TEXT [--server URL] [--runtime ollama] [--require-model] [--wait]
+houdry job list [--server URL] [--token TOKEN] [--json]
+houdry job get JOB_ID [--server URL] [--token TOKEN] [--json]
 houdry serve [--listen ADDR] [--data DIR] [--binaries DIR] [--token TOKEN]
 houdry version
 ```
 
-In command help, square brackets mean optional flags. Do not type `[` or `]`.
+Square brackets mean optional. Do not type `[` or `]`.
 
-Environment variables: `HOODRY_SERVER`, `HOODRY_TOKEN`, `HOODRY_HOME`.
-
-Config: `~/.houdry/config.json` (Windows: `%USERPROFILE%\.houdry\config.json`).
-
-Server state default: `~/.houdry/server/nodes.json`.
+Environment: `HOODRY_SERVER`, `HOODRY_TOKEN`, `HOODRY_HOME`.
 
 ---
 
-## Detection behavior
+## Build
 
-Houdry runs every available detector and merges matches by GPU UUID or PCI ID.
+Requires Go 1.23+.
 
-- NVIDIA (`nvidia-smi`): model, UUID, PCI, driver, memory, utilization,
-  temperature, CUDA compatibility, compute capability when available
-- AMD ROCm (`rocm-smi`): model, PCI, VRAM, utilization, temperature when available
-- Linux: DRM sysfs + optional `lspci`
-- Windows: `Win32_VideoController` via PowerShell CIM
-- macOS: `system_profiler SPDisplaysDataType -json`
-
-Missing tools produce partial results or warnings, not invented values.
-
----
-
-## Security limitations (Phase 1)
-
-- Plain HTTP only
-- Optional shared token protects only `/v1/nodes/join` and `/v1/nodes`
-- Dashboard, installers, and downloads stay public even with a token
-- Client-submitted inventory is trusted
-- File store, not a production database
-
----
-
-## Release
-
-Current release: [v0.1.0](https://github.com/houdry-genomex/houdry/releases/tag/v0.1.0)
-
-Assets: Linux/macOS/Windows binaries (amd64 + arm64), `install.sh`, `install.ps1`.
+```bash
+make build
+make test
+make dist
+```
