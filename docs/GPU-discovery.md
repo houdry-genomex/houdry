@@ -150,34 +150,51 @@ path does not provide live utilization, temperature, or driver version.
 
 ## Installation
 
-The server-hosted installers are available only while `houdry serve` is
-reachable:
+### Public GitHub release (friends / any machine)
+
+Release: [v0.1.0](https://github.com/houdry-genomex/houdry/releases/tag/v0.1.0)
+
+```bash
+# Linux / macOS
+curl -fsSL https://github.com/houdry-genomex/houdry/releases/latest/download/install.sh | sh
+export PATH="$HOME/.houdry/bin:$PATH"
+houdry gpu detect
+```
+
+```powershell
+# Windows PowerShell
+irm https://github.com/houdry-genomex/houdry/releases/latest/download/install.ps1 | iex
+& "$HOME\.houdry\bin\houdry.exe" gpu detect
+```
+
+Install places the binary in `~/.houdry/bin` (Windows:
+`%USERPROFILE%\.houdry\bin`). The current shell may not find `houdry` until
+`PATH` is updated or a new terminal is opened.
+
+### Server-hosted installers
+
+Available only while `houdry serve` is reachable. Replace `HOST` with a real
+IP/hostname (do not type `HOST` literally):
 
 ```bash
 # Linux or macOS
-curl -fsSL http://SERVER:8080/install.sh | sh
+curl -fsSL http://HOST:18080/install.sh | sh
 
 # Windows PowerShell
-irm http://SERVER:8080/install.ps1 | iex
+irm http://HOST:18080/install.ps1 | iex
 ```
 
 Git Bash, MSYS2, and Cygwin can use `install.sh`; it maps those environments to
 the Windows binary. Native PowerShell should use `install.ps1`.
 
-They download `/download/{os}/{arch}`, install into `~/.houdry/bin` (normally
-`%USERPROFILE%\.houdry\bin` on Windows), write the server URL to
-`~/.houdry/config.json`, and add the bin directory to the user PATH/profile.
-Running a server-hosted installer rewrites that config file and resets the local
-node ID.
+Server-hosted installers download `/download/{os}/{arch}`, install into
+`~/.houdry/bin`, write the server URL to `~/.houdry/config.json`, and append the
+bin directory to the user PATH/profile. Running a server-hosted installer
+rewrites that config file and resets the local node ID.
 
 The server can always serve its own executable for its own OS/architecture.
 Other targets require matching files in the `--binaries` directory, normally
 created with `make dist`.
-
-The repository includes a tag-triggered GitHub Actions release workflow and
-separate release installer scripts. No public release should be documented as
-available until a release actually exists and its assets are publicly
-downloadable.
 
 ## Join resolution and stored state
 
@@ -221,6 +238,9 @@ houdry gpu list [--server URL] [--token TOKEN] [--json]
 houdry serve [--listen ADDR] [--data DIR] [--binaries DIR] [--token TOKEN]
 houdry version
 ```
+
+Square brackets mean optional. Do not type `[` or `]`. Replace `URL`, `TOKEN`,
+`ADDR`, and `DIR` with real values.
 
 Defaults:
 

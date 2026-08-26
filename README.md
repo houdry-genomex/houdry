@@ -1,146 +1,147 @@
 # Houdry — Phase 1 GPU discovery and join
 
-Houdry currently provides a cross-platform CLI that discovers GPUs on one
-machine and can submit a one-time inventory snapshot to a Houdry server.
-Scheduling, remote execution, model serving, agents, and continuous node
-monitoring are not implemented.
+Houdry discovers GPUs on a machine and can submit one inventory snapshot to a
+Houdry server. Scheduling, remote execution, model serving, agents, and
+continuous monitoring are not implemented yet.
 
-See [the Phase 1 specification](docs/GPU-discovery.md) for exact behavior and
-platform limitations.
+Full Phase 1 details: [docs/GPU-discovery.md](docs/GPU-discovery.md)
 
-## Current release status
+Repository: [houdry-genomex/houdry](https://github.com/houdry-genomex/houdry)
 
-There is not yet a published GitHub release. The public `curl`/PowerShell
-installer URLs will not work until the repository is in its final GitHub
-organization and a `v*` tag has produced a release. For now, build from source.
+---
 
-## Build and detect locally
+## For friends: detect GPUs on your laptop
 
-Go 1.23 or newer is required.
+### Linux / macOS
+
+```bash
+curl -fsSL https://github.com/houdry-genomex/houdry/releases/latest/download/install.sh | sh
+export PATH="$HOME/.houdry/bin:$PATH"
+houdry gpu detect
+```
+
+### Windows PowerShell
+
+```powershell
+irm https://github.com/houdry-genomex/houdry/releases/latest/download/install.ps1 | iex
+& "$HOME\.houdry\bin\houdry.exe" gpu detect
+```
+
+Notes:
+
+- Install puts the binary in `~/.houdry/bin` (Windows: `%USERPROFILE%\.houdry\bin`).
+- The current shell may not see `houdry` until you export `PATH` or open a new terminal.
+- `gpu detect` only inspects the local machine. It does not send data to a server.
+
+---
+
+## Join a Houdry server (optional)
+
+Someone must run the server first:
+
+```bash
+# from a machine that has the source / dist binaries
+make dist
+./bin/houdry serve --listen 0.0.0.0:18080 --binaries dist
+```
+
+Then each GPU machine:
+
+```bash
+export PATH="$HOME/.houdry/bin:$PATH"
+houdry gpu join --server http://HOST:18080
+houdry gpu list --server http://HOST:18080
+```
+
+Replace `HOST` with the real server IP or hostname (for example `127.0.0.1` on
+the same machine, or `192.168.1.20` on a LAN). Do not type the word `HOST`
+literally.
+
+With an optional shared token:
+
+```bash
+./bin/houdry serve --listen 0.0.0.0:18080 --binaries dist --token CHANGE_ME
+houdry gpu join --server http://HOST:18080 --token CHANGE_ME
+```
+
+Open `http://HOST:18080/` for the dashboard.
+
+Server-hosted install (while the server is running):
+
+```bash
+# Linux / macOS
+curl -fsSL http://HOST:18080/install.sh | sh
+
+# Windows PowerShell
+irm http://HOST:18080/install.ps1 | iex
+```
+
+Those installers save the server URL into `~/.houdry/config.json`, so
+`houdry gpu join` can omit `--server`.
+
+---
+
+## Build from source
+
+Requires Go 1.23+.
 
 ```bash
 make build
 ./bin/houdry gpu detect
-```
 
-Machine-readable output:
-
-```bash
-./bin/houdry gpu detect --json
-```
-
-`make build` builds for the current operating system and architecture.
-`make dist` cross-compiles these six targets into `dist/`:
-
-- Linux: amd64, arm64
-- macOS: amd64, arm64
-- Windows: amd64, arm64
-
-Cross-compilation confirms that the code builds for a target; it is not a
-substitute for testing on representative hardware and driver versions.
-
-## Detect and join flow
-
-Build all downloadable binaries and start the server:
-
-```bash
-make dist
-./bin/houdry serve \
-  --listen 0.0.0.0:8080 \
-  --binaries dist \
-  --token CHANGE_ME
-```
-
-Install on a Linux or macOS node:
-
-```bash
-curl -fsSL http://SERVER:8080/install.sh | sh
-houdry gpu detect
-HOODRY_TOKEN=CHANGE_ME houdry gpu join
-```
-
-Install on a Windows node from PowerShell:
-
-```powershell
-irm http://SERVER:8080/install.ps1 | iex
-houdry gpu detect
-$env:HOODRY_TOKEN = "CHANGE_ME"
-houdry gpu join
-```
-
-The server-hosted installers save the server URL, so `gpu join` does not need
-`--server`. If Houdry was installed another way:
-
-```bash
-houdry gpu join --server http://SERVER:8080 --token CHANGE_ME
-```
-
-Open `http://SERVER:8080/` for the dashboard, or list nodes from the CLI:
-
-```bash
-houdry gpu list --server http://SERVER:8080 --token CHANGE_ME
-```
-
-`gpu join` sends one snapshot. It does not start a daemon or heartbeat; values
-and `last_seen` change only when the node runs `gpu join` again.
-
-## Commands
-
-- `houdry gpu detect [--json]`
-- `houdry gpu join [--server URL] [--token TOKEN] [--json]`
-- `houdry gpu list [--server URL] [--token TOKEN] [--json]`
-- `houdry serve [--listen ADDR] [--data DIR] [--binaries DIR] [--token TOKEN]`
-- `houdry version`
-
-Configuration precedence for joins is command flag, environment variable, then
-saved config. Supported environment variables are `HOODRY_SERVER`,
-`HOODRY_TOKEN`, and `HOODRY_HOME`.
-
-The default config path is `~/.houdry/config.json` (`%USERPROFILE%\.houdry\config.json`
-on typical Windows installations). Server state defaults to
-`~/.houdry/server/nodes.json`.
-
-## Detection behavior
-
-Houdry runs every detector available on the host and merges matching records by
-GPU UUID or normalized PCI bus ID.
-
-- NVIDIA (`nvidia-smi`, any supported OS): model, UUID, PCI ID, driver, total
-  and used memory, GPU and memory utilization, temperature, CUDA compatibility
-  version, and compute capability when the installed driver exposes it.
-- AMD ROCm (`rocm-smi`/`rocm_smi.py`, when installed): model, PCI ID, VRAM,
-  GPU utilization, temperature, and driver/ROCm version when present.
-- Linux: DRM sysfs and optional `lspci` provide fallback identity, vendor, PCI
-  ID, driver-module name, and VRAM fields where the kernel exposes them.
-- Windows: `Win32_VideoController` through PowerShell CIM provides fallback
-  model, vendor, reported adapter RAM, and driver version.
-- macOS: `system_profiler SPDisplaysDataType -json` provides model, vendor, GPU
-  core count where reported, and dedicated VRAM where reported. Unified/shared
-  memory, live utilization, temperature, and driver version are not currently
-  derived from `system_profiler`.
-
-Missing tools or unsupported fields produce partial records or warnings rather
-than invented values.
-
-## Server and security limitations
-
-- The server uses plain HTTP. Put TLS and access controls in front of it before
-  exposing it beyond a trusted development network.
-- `--token`/`HOODRY_TOKEN` is one shared bearer token. It protects only
-  `POST /v1/nodes/join` and `GET /v1/nodes`.
-- The dashboard, health endpoint, installers, and binary downloads remain
-  unauthenticated even when a token is configured.
-- Node inventory is held in memory and also written to `nodes.json`; this is a
-  Phase 1 file store, not a production database.
-- The server trusts inventory supplied by clients and does not establish node
-  identity, attest hardware, encrypt stored inventory, or revoke nodes.
-
-## Tests
-
-```bash
+make dist    # linux/darwin/windows × amd64/arm64 into dist/
 make test
 ```
 
-The automated tests cover parsing, normalization, persistence, API joins,
-token checks, and installer rendering. Native hardware validation is still
-required on macOS, Windows, Intel GPUs, and AMD/ROCm systems.
+---
+
+## Commands
+
+```text
+houdry gpu detect [--json]
+houdry gpu join [--server URL] [--token TOKEN] [--json]
+houdry gpu list [--server URL] [--token TOKEN] [--json]
+houdry serve [--listen ADDR] [--data DIR] [--binaries DIR] [--token TOKEN]
+houdry version
+```
+
+In command help, square brackets mean optional flags. Do not type `[` or `]`.
+
+Environment variables: `HOODRY_SERVER`, `HOODRY_TOKEN`, `HOODRY_HOME`.
+
+Config: `~/.houdry/config.json` (Windows: `%USERPROFILE%\.houdry\config.json`).
+
+Server state default: `~/.houdry/server/nodes.json`.
+
+---
+
+## Detection behavior
+
+Houdry runs every available detector and merges matches by GPU UUID or PCI ID.
+
+- NVIDIA (`nvidia-smi`): model, UUID, PCI, driver, memory, utilization,
+  temperature, CUDA compatibility, compute capability when available
+- AMD ROCm (`rocm-smi`): model, PCI, VRAM, utilization, temperature when available
+- Linux: DRM sysfs + optional `lspci`
+- Windows: `Win32_VideoController` via PowerShell CIM
+- macOS: `system_profiler SPDisplaysDataType -json`
+
+Missing tools produce partial results or warnings, not invented values.
+
+---
+
+## Security limitations (Phase 1)
+
+- Plain HTTP only
+- Optional shared token protects only `/v1/nodes/join` and `/v1/nodes`
+- Dashboard, installers, and downloads stay public even with a token
+- Client-submitted inventory is trusted
+- File store, not a production database
+
+---
+
+## Release
+
+Current release: [v0.1.0](https://github.com/houdry-genomex/houdry/releases/tag/v0.1.0)
+
+Assets: Linux/macOS/Windows binaries (amd64 + arm64), `install.sh`, `install.ps1`.
