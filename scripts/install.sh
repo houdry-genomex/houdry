@@ -1,10 +1,10 @@
 #!/bin/sh
 # Houdry public installer — Linux, macOS, Git Bash on Windows
 # Usage:
-#   curl -fsSL https://github.com/Orchestrator-sih-2026/houdry/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/houdry-genomex/houdry/releases/latest/download/install.sh | sh
 set -e
 
-REPO="${HOODRY_REPO:-Orchestrator-sih-2026/houdry}"
+REPO="${HOODRY_REPO:-houdry-genomex/houdry}"
 VERSION="${HOODRY_VERSION:-latest}"
 
 if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
