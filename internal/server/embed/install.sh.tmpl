@@ -45,10 +45,14 @@ cleanup() { rm -f "$tmp"; }
 trap cleanup EXIT
 
 if command -v curl >/dev/null 2>&1; then
-  curl -fL --progress-bar "$url" -o "$tmp"
+  curl -fL --silent --show-error \
+    --retry 3 --retry-delay 2 --retry-max-time 180 \
+    --connect-timeout 15 --max-time 180 \
+    "$url" -o "$tmp"
 else
   wget -qO "$tmp" "$url"
 fi
+echo "Download complete."
 
 houdry_home="${HOODRY_HOME:-${HOME}/.houdry}"
 bin_dir="${houdry_home}/bin"
