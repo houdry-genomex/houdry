@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="8">
+  <title>Houdry — joined GPUs</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+      background: #0c0f14;
+      color: #e8edf4;
+    }
+    header {
+      padding: 20px 28px 12px;
+      border-bottom: 1px solid #1f2733;
+    }
+    h1 { margin: 0; font-size: 20px; letter-spacing: 0.04em; }
+    .sub { color: #8b98a8; margin-top: 4px; }
+    main { padding: 20px 28px 48px; }
+    .node {
+      background: #121821;
+      border: 1px solid #1f2733;
+      border-radius: 10px;
+      padding: 16px 18px;
+      margin-bottom: 16px;
+    }
+    .node h2 { margin: 0 0 6px; font-size: 16px; }
+    .meta { color: #8b98a8; font-size: 12px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #1f2733; }
+    th { color: #8b98a8; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .empty { color: #8b98a8; padding: 40px 0; }
+    code { background: #1a2230; padding: 2px 6px; border-radius: 4px; }
+    .install { margin-top: 12px; color: #8b98a8; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Houdry</h1>
+    <div class="sub">Phase 1 GPU fabric · {{.Version}} · {{.Server}}</div>
+    <div class="install">
+      Linux/macOS: <code>curl -fsSL {{.Server}}/install.sh | sh</code><br>
+      Windows: <code>irm {{.Server}}/install.ps1 | iex</code>
+    </div>
+  </header>
+  <main>
+    {{if not .Nodes}}
+      <p class="empty">No nodes have joined yet. Install Houdry on a GPU machine, then run <code>houdry gpu join</code>.</p>
+    {{else}}
+      {{range .Nodes}}
+      <section class="node">
+        <h2>{{.Host.Hostname}}</h2>
+        <div class="meta">
+          {{.Host.OS}}/{{.Host.Arch}} · node {{.NodeID}} · {{len .GPUs}} GPU(s)<br>
+          joined {{time .JoinedAt}} · last seen {{time .LastSeen}}
+        </div>
+        {{if .GPUs}}
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Vendor</th>
+              <th>Name</th>
+              <th>Memory</th>
+              <th>Util</th>
+              <th>Temp</th>
+              <th>Driver</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .GPUs}}
+            <tr>
+              <td>{{.Index}}</td>
+              <td>{{.Vendor}}</td>
+              <td>{{.Name}}</td>
+              <td>{{bytes .MemoryTotalBytes}}</td>
+              <td>{{pct .UtilizationGPU}}</td>
+              <td>{{temp .TemperatureC}}</td>
+              <td>{{.DriverVersion}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+        {{else}}
+          <p class="meta">No GPUs reported by this node.</p>
+        {{end}}
+      </section>
+      {{end}}
+    {{end}}
+  </main>
+</body>
+</html>

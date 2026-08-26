@@ -1,0 +1,64 @@
+# Houdry installer (Windows PowerShell 5+ / PowerShell 7)
+$ErrorActionPreference = "Stop"
+
+$Server = if ($env:HOODRY_SERVER) { $env:HOODRY_SERVER.TrimEnd("/") } else { "{{.Server}}" }
+$Version = "{{.Version}}"
+
+$arch = "amd64"
+try {
+  $a = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLower()
+  switch ($a) {
+    "x64" { $arch = "amd64" }
+    "arm64" { $arch = "arm64" }
+    default { $arch = $a }
+  }
+} catch {
+  if (-not [Environment]::Is64BitOperatingSystem) {
+    throw "Unsupported architecture: 32-bit Windows"
+  }
+}
+
+$os = "windows"
+if ($IsLinux) { $os = "linux" }
+elseif ($IsMacOS) { $os = "darwin" }
+
+$url = "$Server/download/$os/$arch"
+Write-Host "Downloading Houdry $Version for $os/$arch"
+Write-Host "  $url"
+
+$homeDir = if ($env:HOODRY_HOME) { $env:HOODRY_HOME } else { Join-Path $HOME ".houdry" }
+$binDir = Join-Path $homeDir "bin"
+New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+
+$ext = ""
+if ($os -eq "windows") { $ext = ".exe" }
+$dest = Join-Path $binDir "houdry$ext"
+
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+
+$config = @{ server = $Server; node_id = "" } | ConvertTo-Json
+New-Item -ItemType Directory -Force -Path $homeDir | Out-Null
+Set-Content -Path (Join-Path $homeDir "config.json") -Value $config -Encoding UTF8
+
+if ($os -eq "windows") {
+  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+  if (-not $userPath) { $userPath = "" }
+  if ($userPath -notlike "*$binDir*") {
+    $joined = if ($userPath) { "$binDir;$userPath" } else { $binDir }
+    [Environment]::SetEnvironmentVariable("Path", $joined, "User")
+  }
+  $env:Path = "$binDir;$env:Path"
+} else {
+  $env:PATH = "$binDir:$env:PATH"
+}
+
+Write-Host ""
+Write-Host "Houdry $Version installed to $dest"
+Write-Host "Configured server: $Server"
+Write-Host ""
+Write-Host "Next:"
+Write-Host "  houdry gpu detect"
+Write-Host "  houdry gpu join"
+Write-Host ""
+Write-Host "If 'houdry' is not found, open a new terminal."

@@ -1,0 +1,10 @@
+/bin/
+/dist/
+/data/
+/houdry-data/
+/.gocache/
+/.gomod/
+*.exe
+*.test
+*.out
+.DS_Store

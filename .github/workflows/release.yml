@@ -1,0 +1,32 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - name: Build binaries
+        run: make dist
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/houdry-linux-amd64
+            dist/houdry-linux-arm64
+            dist/houdry-darwin-amd64
+            dist/houdry-darwin-arm64
+            dist/houdry-windows-amd64.exe
+            dist/houdry-windows-arm64.exe
+            scripts/install.sh
+            scripts/install.ps1
