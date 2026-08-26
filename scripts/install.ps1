@@ -1,9 +1,9 @@
 # Houdry public installer — Windows PowerShell 5+ / PowerShell 7
 # Usage:
-#   irm https://github.com/Abhishekmishra2808/houdry/releases/latest/download/install.ps1 | iex
+#   irm https://github.com/Orchestrator-sih-2026/houdry/releases/latest/download/install.ps1 | iex
 $ErrorActionPreference = "Stop"
 
-$Repo = if ($env:HOODRY_REPO) { $env:HOODRY_REPO } else { "Abhishekmishra2808/houdry" }
+$Repo = if ($env:HOODRY_REPO) { $env:HOODRY_REPO } else { "Orchestrator-sih-2026/houdry" }
 $Version = if ($env:HOODRY_VERSION) { $env:HOODRY_VERSION } else { "latest" }
 
 $arch = "amd64"
