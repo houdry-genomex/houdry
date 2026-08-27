@@ -16,11 +16,25 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23.x"
+      - name: Test
+        run: make test
       - name: Build binaries
         run: make dist VERSION="${GITHUB_REF_NAME#v}"
+      - name: Verify release CLI surface
+        run: |
+          set -e
+          ver="${GITHUB_REF_NAME#v}"
+          bin=./dist/houdry-linux-amd64
+          chmod +x "$bin"
+          "$bin" version | grep -F "houdry ${ver}"
+          "$bin" help | grep -F "houdry node join"
+          "$bin" help | grep -F "houdry node list"
+          "$bin" help | grep -F "houdry job submit"
+          "$bin" help | grep -F "houdry serve"
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          generate_release_notes: true
           files: |
             dist/houdry-linux-amd64
             dist/houdry-linux-arm64
@@ -30,3 +44,4 @@ jobs:
             dist/houdry-windows-arm64.exe
             scripts/install.sh
             scripts/install.ps1
+          fail_on_unmatched_files: true

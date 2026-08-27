@@ -1,4 +1,9 @@
 package version
 
-// Version is set at build time via -ldflags.
-var Version = "0.5.0-dev"
+// Version is the default semantic version for this tree.
+// Release builds override it via:
+//
+//	go build -ldflags "-X houdry/internal/version.Version=0.6.0"
+//
+// (see Makefile VERSION / .github/workflows/release.yml).
+var Version = "0.6.0"

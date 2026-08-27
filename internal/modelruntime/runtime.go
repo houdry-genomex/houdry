@@ -2,6 +2,7 @@ package modelruntime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -40,11 +41,16 @@ func (m Model) Ref() string {
 }
 
 // InferRequest is a framework-agnostic generation request.
+// Prefer Messages (+ optional Tools) for chat/tool-capable runtimes;
+// Prompt remains the fallback for simple /generate backends.
 type InferRequest struct {
-	Name    string       `json:"name"`
-	Tag     string       `json:"tag,omitempty"`
-	Prompt  string       `json:"prompt"`
-	Options InferOptions `json:"options,omitempty"`
+	Name       string          `json:"name"`
+	Tag        string          `json:"tag,omitempty"`
+	Prompt     string          `json:"prompt"`
+	Messages   []ChatMessage   `json:"messages,omitempty"`
+	Tools      []Tool          `json:"tools,omitempty"`
+	ToolChoice json.RawMessage `json:"tool_choice,omitempty"`
+	Options    InferOptions    `json:"options,omitempty"`
 }
 
 // InferOptions are portable hints; adapters map what they support.
@@ -68,6 +74,8 @@ type InferResult struct {
 	Name         string         `json:"name,omitempty"`
 	Tag          string         `json:"tag,omitempty"`
 	Text         string         `json:"text"`
+	ToolCalls    []ToolCall     `json:"tool_calls,omitempty"`
+	FinishReason string         `json:"finish_reason,omitempty"`
 	Duration     time.Duration  `json:"-"`
 	DurationMS   int64          `json:"duration_ms"`
 	LoadMS       int64          `json:"load_ms,omitempty"`

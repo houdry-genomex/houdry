@@ -173,8 +173,13 @@ scoring of (model, node) pairs (prefer loaded + complexity-appropriate models),
 `POST /v1/route`, and `houdry route --prompt … [--execute]`. Vision/OCR/PDF
 pipelines are detected and deferred.
 
-Still not implemented: agentic workspace, RAG, OpenHands, OCR/vision chains,
-and durable multi-tenant security.
+**OpenAI-compatible API (additive):** `POST /v1/chat/completions` and
+`GET /v1/models` so OpenHands (and other OpenAI SDK clients) can use Houdry as
+an LLM backend. `model=auto` reuses the Phase 5 router; inference still runs as
+a Houdry job on a node agent via the Model Runtime API (not Ollama-hardcoded).
+
+Still not implemented: agentic workspace, RAG, OCR/vision chains, embedding
+OpenHands inside Houdry, and durable multi-tenant security.
 
 Exact contracts:
 - [`docs/GPU-discovery.md`](docs/GPU-discovery.md)
@@ -182,3 +187,4 @@ Exact contracts:
 - [`docs/Phase-3-scheduling.md`](docs/Phase-3-scheduling.md)
 - [`docs/Phase-4-model-runtime.md`](docs/Phase-4-model-runtime.md)
 - [`docs/Phase-5-routing.md`](docs/Phase-5-routing.md)
+- [`docs/OpenAI-compatible-API.md`](docs/OpenAI-compatible-API.md)

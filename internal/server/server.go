@@ -22,10 +22,12 @@ import (
 )
 
 type Options struct {
-	DataDir     string
-	BinariesDir string
-	Token       string
-	Version     string
+	DataDir             string
+	BinariesDir         string
+	Token               string
+	Version             string
+	DisableOpenAICompat bool          // when true, /v1/chat/completions is not registered
+	OpenAIWait          time.Duration // max wait for chat completion inference
 }
 
 // JoinRequest is the body for join and heartbeat. Phase 1 clients send only
@@ -53,6 +55,9 @@ type Server struct {
 func New(opts Options) (*Server, error) {
 	if opts.Version == "" {
 		opts.Version = version.Version
+	}
+	if opts.OpenAIWait <= 0 {
+		opts.OpenAIWait = 10 * time.Minute
 	}
 	st, err := NewStore(opts.DataDir)
 	if err != nil {
@@ -126,6 +131,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/jobs/{id}/result", s.handleJobResult)
 	s.mux.HandleFunc("GET /v1/catalog", s.handleCatalog)
 	s.mux.HandleFunc("POST /v1/route", s.handleRoute)
+	if !s.opts.DisableOpenAICompat {
+		s.mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
+		s.mux.HandleFunc("GET /v1/models", s.handleOpenAIModels)
+	}
 	s.mux.HandleFunc("GET /install.sh", s.handleInstallSH)
 	s.mux.HandleFunc("GET /install.ps1", s.handleInstallPS1)
 	s.mux.HandleFunc("GET /download/{os}/{arch}", s.handleDownload)

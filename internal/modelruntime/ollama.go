@@ -188,6 +188,9 @@ func (o *Ollama) Infer(ctx context.Context, in InferRequest) (InferResult, error
 	if ref == "" {
 		return InferResult{}, fmt.Errorf("model name is required")
 	}
+	if in.UsesChatAPI() {
+		return o.inferChat(ctx, in)
+	}
 	if in.Prompt == "" {
 		return InferResult{}, fmt.Errorf("prompt is required")
 	}
@@ -259,6 +262,7 @@ func (o *Ollama) Infer(ctx context.Context, in InferRequest) (InferResult, error
 		Name:         firstNonEmpty(outID.Name, in.Name),
 		Tag:          firstNonEmpty(outID.Tag, in.Tag),
 		Text:         parsed.Response,
+		FinishReason: "stop",
 		Duration:     dur,
 		DurationMS:   dur.Milliseconds(),
 		LoadMS:       loadMS,
@@ -270,7 +274,168 @@ func (o *Ollama) Infer(ctx context.Context, in InferRequest) (InferResult, error
 			"done":       parsed.Done,
 			"keep_alive": keepAlive,
 			"max_tokens": in.Options.MaxTokens,
+			"endpoint":   "/api/generate",
 			"note":       "load_ms is VRAM load/cold-start; generate_ms is token generation",
+		},
+	}, nil
+}
+
+func (o *Ollama) inferChat(ctx context.Context, in InferRequest) (InferResult, error) {
+	ref := in.Ref()
+	messages := in.Messages
+	if len(messages) == 0 && in.Prompt != "" {
+		messages = []ChatMessage{{Role: "user", Content: in.Prompt}}
+	}
+	if len(messages) == 0 {
+		return InferResult{}, fmt.Errorf("messages or prompt is required")
+	}
+
+	keepAlive := in.Options.KeepAlive
+	if keepAlive == "" {
+		keepAlive = "30m"
+	}
+
+	ollamaMsgs := make([]map[string]any, 0, len(messages))
+	for _, m := range messages {
+		msg := map[string]any{
+			"role":    m.Role,
+			"content": m.Content,
+		}
+		if m.ToolCallID != "" {
+			msg["tool_call_id"] = m.ToolCallID
+		}
+		if m.Name != "" {
+			msg["name"] = m.Name
+		}
+		if len(m.ToolCalls) > 0 {
+			// Ollama accepts OpenAI-ish tool_calls; arguments may be object or string.
+			calls := make([]map[string]any, 0, len(m.ToolCalls))
+			for _, tc := range m.ToolCalls {
+				var args any = map[string]any{}
+				if strings.TrimSpace(tc.Function.Arguments) != "" {
+					if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+						args = tc.Function.Arguments
+					}
+				}
+				calls = append(calls, map[string]any{
+					"type": firstNonEmpty(tc.Type, "function"),
+					"function": map[string]any{
+						"name":      tc.Function.Name,
+						"arguments": args,
+					},
+				})
+			}
+			msg["tool_calls"] = calls
+		}
+		ollamaMsgs = append(ollamaMsgs, msg)
+	}
+
+	bodyMap := map[string]any{
+		"model":      ref,
+		"messages":   ollamaMsgs,
+		"stream":     false,
+		"keep_alive": keepAlive,
+	}
+	if len(in.Tools) > 0 {
+		bodyMap["tools"] = in.Tools
+	}
+	if len(in.ToolChoice) > 0 && string(in.ToolChoice) != "null" {
+		var tc any
+		if err := json.Unmarshal(in.ToolChoice, &tc); err == nil {
+			bodyMap["tool_choice"] = tc
+		}
+	}
+	opts := map[string]any{}
+	if in.Options.MaxTokens > 0 {
+		opts["num_predict"] = in.Options.MaxTokens
+	}
+	if in.Options.Temperature != nil {
+		opts["temperature"] = *in.Options.Temperature
+	}
+	if len(opts) > 0 {
+		bodyMap["options"] = opts
+	}
+
+	payload, _ := json.Marshal(bodyMap)
+	start := time.Now()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.BaseURL+"/api/chat", bytes.NewReader(payload))
+	if err != nil {
+		return InferResult{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := o.Client.Do(req)
+	if err != nil {
+		return InferResult{}, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if resp.StatusCode >= 300 {
+		return InferResult{}, fmt.Errorf("ollama chat: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var parsed struct {
+		Model   string `json:"model"`
+		Message struct {
+			Role      string          `json:"role"`
+			Content   string          `json:"content"`
+			ToolCalls json.RawMessage `json:"tool_calls"`
+		} `json:"message"`
+		Done               bool   `json:"done"`
+		DoneReason         string `json:"done_reason"`
+		LoadDuration       int64  `json:"load_duration"`
+		PromptEvalDuration int64  `json:"prompt_eval_duration"`
+		EvalDuration       int64  `json:"eval_duration"`
+		PromptEvalCount    int    `json:"prompt_eval_count"`
+		EvalCount          int    `json:"eval_count"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return InferResult{}, err
+	}
+
+	toolCalls := OllamaToolCallsToOpenAI(parsed.Message.ToolCalls)
+	text := parsed.Message.Content
+	// Small models often emit tool intent as JSON text instead of tool_calls.
+	if len(toolCalls) == 0 && in.HasTools() {
+		if recovered := NormalizeToolCallsFromText(text); len(recovered) > 0 {
+			toolCalls = recovered
+			text = ""
+		}
+	}
+	finish := parsed.DoneReason
+	if finish == "" {
+		finish = "stop"
+	}
+	if len(toolCalls) > 0 {
+		finish = "tool_calls"
+	}
+
+	outRef := parsed.Model
+	if outRef == "" {
+		outRef = ref
+	}
+	outID := ParseRef(outRef)
+	dur := time.Since(start)
+	return InferResult{
+		Runtime:      o.Name(),
+		Model:        outRef,
+		Name:         firstNonEmpty(outID.Name, in.Name),
+		Tag:          firstNonEmpty(outID.Tag, in.Tag),
+		Text:         text,
+		ToolCalls:    toolCalls,
+		FinishReason: finish,
+		Duration:     dur,
+		DurationMS:   dur.Milliseconds(),
+		LoadMS:       parsed.LoadDuration / 1e6,
+		PromptMS:     parsed.PromptEvalDuration / 1e6,
+		GenerateMS:   parsed.EvalDuration / 1e6,
+		PromptTokens: parsed.PromptEvalCount,
+		OutputTokens: parsed.EvalCount,
+		Details: map[string]any{
+			"done":       parsed.Done,
+			"keep_alive": keepAlive,
+			"max_tokens": in.Options.MaxTokens,
+			"endpoint":   "/api/chat",
+			"tools":      len(in.Tools),
 		},
 	}, nil
 }

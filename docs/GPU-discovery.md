@@ -152,19 +152,25 @@ path does not provide live utilization, temperature, or driver version.
 
 ### Public GitHub release (friends / any machine)
 
-Release: [v0.1.0](https://github.com/houdry-genomex/houdry/releases/tag/v0.1.0)
+Current release line: **[v0.6.0](https://github.com/houdry-genomex/houdry/releases/tag/v0.6.0)**
+(full CLI: node agent, jobs, routing, OpenAI-compatible API). See
+[Release.md](Release.md) for publish steps and asset names.
 
 ```bash
 # Linux / macOS
 curl -fsSL https://github.com/houdry-genomex/houdry/releases/latest/download/install.sh | sh
 export PATH="$HOME/.houdry/bin:$PATH"
+houdry version
 houdry gpu detect
+houdry node join --server http://HOST:18080
 ```
 
 ```powershell
 # Windows PowerShell
 irm https://github.com/houdry-genomex/houdry/releases/latest/download/install.ps1 | iex
+& "$HOME\.houdry\bin\houdry.exe" version
 & "$HOME\.houdry\bin\houdry.exe" gpu detect
+& "$HOME\.houdry\bin\houdry.exe" node join --server http://HOST:18080
 ```
 
 Install places the binary in `~/.houdry/bin` (Windows:

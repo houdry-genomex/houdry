@@ -5,32 +5,46 @@ Phase 2 adds a persistent **node agent**, **heartbeat**, and **GPU jobs**.
 Phase 3 adds **multi-node registration**, **resource profiles**, a **capability-aware scheduler**, **job queue**, and **drain/offline** handling.
 Phase 4 adds a pluggable **Model Runtime** (Ollama first), **model discovery**, and **`inference` jobs**.
 Phase 5 adds **intelligent model & resource routing** (task profile → catalog → best model+node).
+Phase 6 adds an **OpenAI-compatible** `POST /v1/chat/completions` layer (for OpenHands and similar clients) that still uses Houdry routing + scheduling.
 
 - Phase 1 details: [docs/GPU-discovery.md](docs/GPU-discovery.md)
 - Phase 2 details: [docs/Phase-2-node-agent.md](docs/Phase-2-node-agent.md)
 - Phase 3 details: [docs/Phase-3-scheduling.md](docs/Phase-3-scheduling.md)
 - Phase 4 details: [docs/Phase-4-model-runtime.md](docs/Phase-4-model-runtime.md)
 - Phase 5 details: [docs/Phase-5-routing.md](docs/Phase-5-routing.md)
+- OpenAI compat: [docs/OpenAI-compatible-API.md](docs/OpenAI-compatible-API.md)
+- Public release / friend install: [docs/Release.md](docs/Release.md)
 
 Repository: [houdry-genomex/houdry](https://github.com/houdry-genomex/houdry)
 
+**Public install / release:** [docs/Release.md](docs/Release.md) (current line **v0.6.0**).
+
 ---
 
-## For friends: detect GPUs
+## For friends: install the current CLI
+
+This installs the **GitHub latest release** binary into `~/.houdry/bin`. After
+**v0.6.0** is published, that binary includes `node join`, jobs, routing, and
+OpenAI-compatible chat — not the old Phase-1-only CLI.
 
 ### Linux / macOS
 
 ```bash
 curl -fsSL https://github.com/houdry-genomex/houdry/releases/latest/download/install.sh | sh
 export PATH="$HOME/.houdry/bin:$PATH"
+houdry version
 houdry gpu detect
+# Join someone's fabric (Tailscale / LAN):
+houdry node join --server http://<SERVER-IP>:18080
 ```
 
 ### Windows PowerShell
 
 ```powershell
 irm https://github.com/houdry-genomex/houdry/releases/latest/download/install.ps1 | iex
+& "$HOME\.houdry\bin\houdry.exe" version
 & "$HOME\.houdry\bin\houdry.exe" gpu detect
+& "$HOME\.houdry\bin\houdry.exe" node join --server http://<SERVER-IP>:18080
 ```
 
 ---
@@ -135,5 +149,8 @@ Requires Go 1.23+.
 ```bash
 make build
 make test
-make dist
+make dist          # cross-platform release assets → dist/
+make dist-check    # assert version + node/job CLI surface
 ```
+
+To publish: tag `v0.6.0` and push — see [docs/Release.md](docs/Release.md).

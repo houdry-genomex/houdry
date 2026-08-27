@@ -88,3 +88,48 @@ func TestRouteFallbackWhenOnlyTinyPresent(t *testing.T) {
 		t.Fatalf("expected fallback to present tinyllama: %+v", d)
 	}
 }
+
+func TestRouteToolsAvoidsTinyllama(t *testing.T) {
+	nodes := []NodeView{{
+		NodeID: "n1", Host: "laptop", Status: "READY",
+		ModelRuntimes: []string{"ollama"},
+		Models: []modelruntime.Model{
+			{Name: "tinyllama", Tag: "latest", Runtime: "ollama", State: modelruntime.StateLoaded},
+			{Name: "qwen2.5-coder", Tag: "1.5b", Runtime: "ollama", State: modelruntime.StateAvailable},
+		},
+		VRAMTotal: 4 << 30, VRAMAvailable: 4 << 30,
+	}}
+	d := Route(RouteRequest{
+		Prompt: "Say hello from Houdry", Catalog: DefaultCatalog(), Nodes: nodes,
+		PreferLoaded: true, AllowPull: false, RequirePresent: true, RequireTools: true,
+	})
+	if d.Selected == nil || d.Selected.Entry.Name != "qwen2.5-coder" {
+		t.Fatalf("expected tool-capable coder, got %+v msg=%s", d.Selected, d.Message)
+	}
+}
+
+func TestRouteToolsNoFallbackToTinyllama(t *testing.T) {
+	nodes := []NodeView{{
+		NodeID: "n1", Status: "READY", ModelRuntimes: []string{"ollama"},
+		Models: []modelruntime.Model{
+			{Name: "tinyllama", Tag: "latest", Runtime: "ollama", State: modelruntime.StateAvailable},
+		},
+		VRAMTotal: 4 << 30, VRAMAvailable: 4 << 30,
+	}}
+	d := Route(RouteRequest{
+		Prompt: "hi", Catalog: DefaultCatalog(), Nodes: nodes,
+		AllowPull: false, RequirePresent: true, RequireTools: true,
+	})
+	if d.Selected != nil {
+		t.Fatalf("expected no selection when only tinyllama present with tools: %+v", d.Selected)
+	}
+}
+
+func TestEntrySupportsToolsHeuristic(t *testing.T) {
+	if EntrySupportsTools(CatalogEntry{Name: "tinyllama", Tag: "latest"}) {
+		t.Fatal("tinyllama should not support tools")
+	}
+	if !EntrySupportsTools(CatalogEntry{Name: "qwen2.5-coder", Tag: "1.5b", Capabilities: []string{"code", "chat"}}) {
+		t.Fatal("coder heuristic should support tools")
+	}
+}

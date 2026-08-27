@@ -62,6 +62,13 @@ Usage:
   houdry serve …
   houdry version
 
+Common commands:
+
+  houdry node join --server http://HOST:18080
+  houdry node list --server http://HOST:18080
+  houdry job submit gpu.smoke --server http://HOST:18080 --wait
+  houdry job submit inference --model NAME --prompt TEXT --wait
+
 Phase 5 routing (analyze → pick model+node → optional execute):
 
   houdry route --prompt "Say hello" --execute --wait
@@ -809,6 +816,8 @@ func runServe(args []string) error {
 	dataDir := fs.String("data", "", "directory for joined-node state (default: ~/.houdry/server)")
 	binaries := fs.String("binaries", "dist", "directory of cross-compiled houdry binaries")
 	token := fs.String("token", "", "optional join token")
+	noOpenAI := fs.Bool("no-openai-compat", false, "disable OpenAI-compatible /v1/chat/completions")
+	openaiWait := fs.Duration("openai-wait", 10*time.Minute, "max wait for chat completion inference jobs")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -820,13 +829,18 @@ func runServe(args []string) error {
 		*token = env
 	}
 	fmt.Printf("Houdry server %s listening on http://%s\n", version.Version, *listen)
+	if !*noOpenAI {
+		fmt.Printf("OpenAI-compatible API: POST http://<host>:%s/v1/chat/completions  (model=auto uses Houdry router)\n", portOf(*listen))
+	}
 	fmt.Printf("Install (Linux/macOS): curl -fsSL http://<host>:%s/install.sh | sh\n", portOf(*listen))
 	fmt.Printf("Install (Windows):     irm http://<host>:%s/install.ps1 | iex\n", portOf(*listen))
 	return server.ListenAndServe(*listen, server.Options{
-		DataDir:     *dataDir,
-		BinariesDir: *binaries,
-		Token:       *token,
-		Version:     version.Version,
+		DataDir:             *dataDir,
+		BinariesDir:         *binaries,
+		Token:               *token,
+		Version:             version.Version,
+		DisableOpenAICompat: *noOpenAI,
+		OpenAIWait:          *openaiWait,
 	})
 }
 

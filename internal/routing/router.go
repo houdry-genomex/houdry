@@ -28,11 +28,24 @@ type RouteRequest struct {
 	AllowPull        bool
 	RequirePresent   bool // only models already on a node
 	PreferredRuntime string
+	// RequireTools restricts selection to models that accept OpenAI-style tools
+	// (Ollama rejects tools on models like tinyllama).
+	RequireTools bool
 }
 
 // Route picks the best (model, node) pair for a prompt.
 func Route(req RouteRequest) Decision {
 	profile := Analyze(req.Prompt)
+	if req.RequireTools {
+		if !hasCap(profile.Capabilities, "tools") {
+			profile.Capabilities = append(profile.Capabilities, "tools")
+		}
+		// Tool-using agents need at least a mid-tier model; tinyllama is out.
+		if ComplexityRank(profile.Complexity) < ComplexityRank(ComplexityMedium) {
+			profile.Complexity = ComplexityMedium
+		}
+		profile.Hints = append(profile.Hints, "tools requested → tool-capable model required")
+	}
 	d := Decision{Profile: profile}
 
 	if profile.Modality == ModalityVision || profile.Modality == ModalityDocument {
@@ -48,6 +61,9 @@ func Route(req RouteRequest) Decision {
 
 	var cands []Candidate
 	for _, entry := range catalog {
+		if req.RequireTools && !EntrySupportsTools(entry) {
+			continue
+		}
 		if !EntrySupports(entry, profile) {
 			continue
 		}
@@ -78,11 +94,16 @@ func Route(req RouteRequest) Decision {
 	if len(cands) == 0 {
 		// Best-effort fallback: prefer any present chat model on a READY node
 		// so a single-laptop cluster with only tinyllama still routes.
+		// Never fall back to a non-tool model when tools were requested.
 		if fb := fallbackPresent(profile, catalog, req); fb != nil {
 			d.Candidates = []Candidate{*fb}
 			d.Selected = fb
 			d.Message = fmt.Sprintf("fallback %s on %s (no ideal catalog match)", fb.Entry.Ref(), label(*fb))
 			d.Profile.Hints = append(d.Profile.Hints, "used best-effort fallback")
+			return d
+		}
+		if req.RequireTools {
+			d.Message = "no tool-capable model+node pair; install a tools-supporting model (e.g. qwen2.5-coder)"
 			return d
 		}
 		d.Message = "no suitable model+node pair; install a matching model or relax requirements"
@@ -97,6 +118,9 @@ func Route(req RouteRequest) Decision {
 func fallbackPresent(profile TaskProfile, catalog []CatalogEntry, req RouteRequest) *Candidate {
 	var best *Candidate
 	for _, entry := range catalog {
+		if req.RequireTools && !EntrySupportsTools(entry) {
+			continue
+		}
 		if !hasCap(entry.Capabilities, "chat") && !hasCap(entry.Capabilities, "simple") {
 			continue
 		}
@@ -209,6 +233,10 @@ func scorePair(entry CatalogEntry, node NodeView, profile TaskProfile, req Route
 	if profile.Complexity == ComplexityLow && hasCap(entry.Capabilities, "simple") {
 		score += 20
 		reasons = append(reasons, "simple-capable model")
+	}
+	if req.RequireTools && EntrySupportsTools(entry) {
+		score += 35
+		reasons = append(reasons, "tool-capable model")
 	}
 
 	if loaded {

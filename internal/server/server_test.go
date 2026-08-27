@@ -76,8 +76,8 @@ func TestJoinAndList(t *testing.T) {
 	if !strings.Contains(body, ts.URL) {
 		t.Fatalf("install.sh missing server url: %s", body[:min(200, len(body))])
 	}
-	if !strings.Contains(body, "houdry gpu join") {
-		t.Fatal("install.sh missing join instructions")
+	if !strings.Contains(body, "houdry node join") {
+		t.Fatal("install.sh missing node join instructions")
 	}
 }
 
