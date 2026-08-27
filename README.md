@@ -5,7 +5,22 @@ Phase 2 adds a persistent **node agent**, **heartbeat**, and **GPU jobs**.
 Phase 3 adds **multi-node registration**, **resource profiles**, a **capability-aware scheduler**, **job queue**, and **drain/offline** handling.
 Phase 4 adds a pluggable **Model Runtime** (Ollama first), **model discovery**, and **`inference` jobs**.
 Phase 5 adds **intelligent model & resource routing** (task profile → catalog → best model+node).
-Phase 6 adds an **OpenAI-compatible** `POST /v1/chat/completions` layer (for OpenHands and similar clients) that still uses Houdry routing + scheduling.
+Phase 6 adds an **OpenAI-compatible** `POST /v1/chat/completions` layer (for agents and SDKs) that still uses Houdry routing + scheduling.
+
+## Two products (houdry-genomex)
+
+| Product | Repo | Who |
+|---------|------|-----|
+| **Houdry** (this repo) | [houdry-genomex/houdry](https://github.com/houdry-genomex/houdry) | GPU / ops — `serve`, `node join`, models, `/v1` |
+| **Houdry Agent** | [houdry-genomex/houdry-agent](https://github.com/houdry-genomex/houdry-agent) | End users — Desktop agent app |
+
+Servers run the fabric. Normal users install **Houdry Agent** (a branded fork of
+[Hermes Agent](https://github.com/NousResearch/hermes-agent) by Nous Research, MIT)
+and point it at `http://<fabric-host>:18080/v1`. See the agent repo’s
+[docs/HOUDRY.md](https://github.com/houdry-genomex/houdry-agent/blob/main/docs/HOUDRY.md).
+
+The fabric stays **agent-framework agnostic**; Houdry Agent is the recommended
+client, not a hard dependency.
 
 - Phase 1 details: [docs/GPU-discovery.md](docs/GPU-discovery.md)
 - Phase 2 details: [docs/Phase-2-node-agent.md](docs/Phase-2-node-agent.md)
@@ -21,7 +36,7 @@ Repository: [houdry-genomex/houdry](https://github.com/houdry-genomex/houdry)
 
 ---
 
-## For friends: install the current CLI
+## For friends: install the current CLI (GPU / fabric hosts)
 
 This installs the **GitHub latest release** binary into `~/.houdry/bin`. After
 **v0.6.0** is published, that binary includes `node join`, jobs, routing, and
@@ -132,6 +147,8 @@ houdry job submit gpu.smoke [--server URL] [--min-vram-mb N] [--wait] [--json]
 houdry job submit inference --model NAME --prompt TEXT [--server URL] [--runtime ollama] [--require-model] [--wait]
 houdry job list [--server URL] [--token TOKEN] [--json]
 houdry job get JOB_ID [--server URL] [--token TOKEN] [--json]
+houdry job cancel JOB_ID [--server URL] [--token TOKEN] [--json]
+houdry job clear --queued|--finished [--server URL] [--token TOKEN] [--json]
 houdry serve [--listen ADDR] [--data DIR] [--binaries DIR] [--token TOKEN]
 houdry version
 ```

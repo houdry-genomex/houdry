@@ -1,10 +1,10 @@
-# OpenAI-compatible API (OpenHands / external clients)
+# OpenAI-compatible API (agents / external clients)
 
 This is an **additive compatibility layer**. It does not replace Houdry’s native
 APIs, router, scheduler, or model runtimes.
 
 ```text
-OpenHands (or any OpenAI SDK client)
+Houdry Agent / OpenHands / any OpenAI SDK client
         ↓
 POST /v1/chat/completions
         ↓
@@ -15,13 +15,15 @@ Inference job → node agent → Model Runtime API → Ollama/vLLM/…
 OpenAI-shaped JSON response
 ```
 
-OpenHands is only a **client**. It is not embedded in Houdry.
+**Recommended client:** [Houdry Agent](https://github.com/houdry-genomex/houdry-agent)
+(Desktop; Hermes-based). OpenHands and other OpenAI-compatible clients also work.
+No agent is embedded in the fabric.
 
 ## Why this exists
 
-Many agent tools (including OpenHands) speak the OpenAI Chat Completions protocol.
-Exposing that shape lets them use Houdry’s private GPU fabric without learning
-Houdry-native job APIs — while still going through Houdry routing and scheduling.
+Agent UIs speak the OpenAI Chat Completions protocol. Exposing that shape lets
+them use Houdry’s private GPU fabric without learning Houdry-native job APIs —
+while still going through Houdry routing and scheduling.
 
 ## Enable / disable
 

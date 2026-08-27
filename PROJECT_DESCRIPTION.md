@@ -115,12 +115,14 @@ Houdry may integrate with existing agent frameworks or custom agents.
 
 Examples may include:
 
+- **Houdry Agent** ([houdry-genomex/houdry-agent](https://github.com/houdry-genomex/houdry-agent)) — recommended Desktop client; a branded fork of Hermes Agent (Nous Research, MIT) that calls this fabric’s `/v1` API
 - OpenHands
 - OpenClaw
 - custom agent implementations
 - future agent frameworks
 
-Houdry should not depend on a single agent framework.
+Houdry should not depend on a single agent framework. The **fabric** (this
+repository) is for GPU/ops hosts; **Houdry Agent** is for normal users.
 
 ---
 

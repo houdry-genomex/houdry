@@ -7,7 +7,14 @@ the repo.
 Current release line: **v0.6.0** (Phases 1–6: GPU fabric, node agent, scheduling,
 model runtime, routing, OpenAI-compatible chat completions).
 
+**End-user Desktop agent** is a separate product:
+[houdry-genomex/houdry-agent](https://github.com/houdry-genomex/houdry-agent)
+(Houdry Agent Desktop, based on Hermes). Fabric releases here; agent Desktop
+installers are published from that repo.
+
 ## What friends run
+
+### GPU / fabric host (this repo)
 
 ### Linux / macOS
 
