@@ -13,3 +13,4 @@
 /generated/
 /cad_*.txt
 /.venv/
+*.exe~
