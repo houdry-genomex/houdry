@@ -209,14 +209,7 @@ func (o *Ollama) Infer(ctx context.Context, in InferRequest) (InferResult, error
 	}
 	bodyMap["keep_alive"] = keepAlive
 
-	opts := map[string]any{}
-	if in.Options.MaxTokens > 0 {
-		opts["num_predict"] = in.Options.MaxTokens
-	}
-	if in.Options.Temperature != nil {
-		opts["temperature"] = *in.Options.Temperature
-	}
-	if len(opts) > 0 {
+	if opts := o.buildOptions(ctx, ref, in.Options); len(opts) > 0 {
 		bodyMap["options"] = opts
 	}
 
@@ -351,14 +344,7 @@ func (o *Ollama) inferChat(ctx context.Context, in InferRequest) (InferResult, e
 			bodyMap["tool_choice"] = tc
 		}
 	}
-	opts := map[string]any{}
-	if in.Options.MaxTokens > 0 {
-		opts["num_predict"] = in.Options.MaxTokens
-	}
-	if in.Options.Temperature != nil {
-		opts["temperature"] = *in.Options.Temperature
-	}
-	if len(opts) > 0 {
+	if opts := o.buildOptions(ctx, ref, in.Options); len(opts) > 0 {
 		bodyMap["options"] = opts
 	}
 

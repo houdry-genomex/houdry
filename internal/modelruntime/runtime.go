@@ -64,6 +64,10 @@ type InferOptions struct {
 	// KeepAlive keeps the model resident after inference (e.g. "30m", "-1").
 	KeepAlive   string   `json:"keep_alive,omitempty"`
 	Temperature *float64 `json:"temperature,omitempty"`
+	// NumCtx sets the context window in tokens (Ollama: num_ctx). Zero means
+	// "resolve it" — see ollama_context.go, which reads the model's own maximum
+	// rather than letting the daemon fall back to its 4096 default.
+	NumCtx int `json:"num_ctx,omitempty"`
 }
 
 // Ref returns the backend model ref.

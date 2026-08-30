@@ -56,14 +56,7 @@ func (o *Ollama) InferStream(ctx context.Context, in InferRequest, onDelta func(
 		}
 	}
 
-	opts := map[string]any{}
-	if in.Options.MaxTokens > 0 {
-		opts["num_predict"] = in.Options.MaxTokens
-	}
-	if in.Options.Temperature != nil {
-		opts["temperature"] = *in.Options.Temperature
-	}
-	if len(opts) > 0 {
+	if opts := o.buildOptions(ctx, ref, in.Options); len(opts) > 0 {
 		bodyMap["options"] = opts
 	}
 
