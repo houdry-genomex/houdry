@@ -40,6 +40,10 @@ func runRouteWeb(ctx context.Context, ollamaURL, addr string) error {
 	mux := http.NewServeMux()
 	mux.Handle("/files/", http.StripPrefix("/files/", http.FileServer(http.Dir(filesDir))))
 
+	// OpenAI-compatible surface, so Houdry Agent (and any OpenAI SDK) can use
+	// this server directly as a provider base_url.
+	registerOpenAICompat(mux, svc, filesDir)
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -121,8 +125,9 @@ func runRouteWeb(ctx context.Context, ollamaURL, addr string) error {
 	})
 
 	fmt.Printf("Houdry chat → http://%s  (Ollama: %s)\n", addr, ollamaURL)
+	fmt.Printf("OpenAI-compatible API → http://%s/v1  (model \"auto\" routes)\n", addr)
 	fmt.Println("Ctrl+C to stop.")
-	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{Addr: addr, Handler: withCORS(mux), ReadHeaderTimeout: 10 * time.Second}
 	errCh := make(chan error, 1)
 	go func() { errCh <- server.ListenAndServe() }()
 	select {
@@ -133,6 +138,23 @@ func runRouteWeb(ctx context.Context, ollamaURL, addr string) error {
 		defer cancel()
 		return server.Shutdown(shutdownCtx)
 	}
+}
+
+// withCORS allows browser clients (the desktop app renderer runs on a file://
+// origin, so every request it makes is cross-origin) to call this server.
+// Permissive is acceptable here: the service binds loopback by default and
+// holds no credentials.
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
