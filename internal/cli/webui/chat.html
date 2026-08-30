@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Houdry</title>
+<style>
+  :root{
+    --bg:#0b0d12; --surface:#11141b; --surface2:#171b24; --border:#232937;
+    --fg:#e6e8ee; --muted:#8b93a7; --faint:#5b6272; --accent:#4d7cff;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.6 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;display:flex;flex-direction:column}
+
+  header{display:flex;align-items:center;gap:10px;padding:12px 18px;
+    border-bottom:1px solid var(--border);flex-shrink:0}
+  .mark{width:22px;height:22px;border-radius:6px;background:var(--fg);
+    color:var(--bg);display:grid;place-items:center;font-weight:700;font-size:12px}
+  header .name{font-weight:600;letter-spacing:-.2px}
+  header .off{margin-left:auto;font:11px ui-monospace,Consolas,monospace;
+    color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:2px 10px}
+  header .off::before{content:"";display:inline-block;width:6px;height:6px;
+    border-radius:50%;background:#3ecf8e;margin-right:6px;vertical-align:1px}
+
+  main{flex:1;overflow-y:auto}
+  .col{max-width:760px;margin:0 auto;padding:24px 18px 8px}
+
+  /* empty state */
+  .hero{display:flex;flex-direction:column;align-items:center;gap:8px;
+    padding-top:16vh;text-align:center}
+  .hero h1{font-size:26px;font-weight:600;letter-spacing:-.4px;margin:0}
+  .hero p{color:var(--muted);margin:0;font-size:14px}
+  .sugs{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:18px}
+  .sug{border:1px solid var(--border);background:var(--surface);color:var(--muted);
+    border-radius:12px;padding:10px 14px;font-size:13px;cursor:pointer;text-align:left}
+  .sug:hover{color:var(--fg);border-color:var(--faint)}
+
+  /* messages */
+  .msg{margin:0 0 26px}
+  .msg.user{display:flex;justify-content:flex-end}
+  .msg.user .bubble{max-width:85%;background:var(--surface2);
+    border:1px solid var(--border);border-radius:16px 16px 4px 16px;
+    padding:10px 14px;white-space:pre-wrap}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;
+    font:11px ui-monospace,Consolas,monospace;color:var(--muted);margin-bottom:6px}
+  .meta .model{color:var(--accent);font-weight:600}
+  .body{white-space:pre-wrap;word-wrap:break-word}
+  .body pre{background:var(--surface);border:1px solid var(--border);
+    border-radius:10px;padding:12px;overflow-x:auto;
+    font:12.5px ui-monospace,Consolas,monospace;white-space:pre}
+  .body code{background:var(--surface2);border-radius:4px;padding:1px 5px;
+    font:12.5px ui-monospace,Consolas,monospace}
+  .body pre code{background:none;padding:0}
+  details{margin-top:8px}
+  summary{cursor:pointer;font-size:12px;color:var(--faint);user-select:none}
+  summary:hover{color:var(--muted)}
+  .detailbox{border-left:2px solid var(--border);margin-top:6px;padding:2px 0 2px 12px;
+    color:var(--muted);font-size:12px}
+  .detailbox .cand{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;padding:1px 0}
+  .detailbox .cand b{color:var(--fg);font-weight:500}
+  .err{color:#fca5a5;font-size:13px}
+
+  /* pending */
+  .dots::after{content:"";display:inline-block;width:1.2em;text-align:left;
+    animation:dots 1.2s steps(4,end) infinite}
+  @keyframes dots{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}}
+
+  /* composer */
+  .composer{flex-shrink:0;padding:10px 18px 18px}
+  .box{max-width:760px;margin:0 auto;display:flex;align-items:flex-end;gap:8px;
+    background:var(--surface);border:1px solid var(--border);border-radius:16px;
+    padding:10px 10px 10px 16px}
+  .box:focus-within{border-color:var(--faint)}
+  textarea{flex:1;background:none;border:0;outline:none;resize:none;color:var(--fg);
+    font:15px/1.5 inherit;max-height:180px;padding:4px 0}
+  .send{width:34px;height:34px;border-radius:10px;border:0;background:var(--fg);
+    color:var(--bg);font-size:16px;cursor:pointer;flex-shrink:0;
+    display:grid;place-items:center}
+  .send:disabled{opacity:.35;cursor:default}
+  .hint{max-width:760px;margin:6px auto 0;text-align:center;
+    font:11px ui-monospace,Consolas,monospace;color:var(--faint)}
+  .attach{width:34px;height:34px;border-radius:10px;border:1px solid var(--border);
+    background:none;color:var(--muted);font-size:15px;cursor:pointer;flex-shrink:0;
+    display:grid;place-items:center}
+  .attach:hover{color:var(--fg);border-color:var(--faint)}
+  .preview{max-width:760px;margin:0 auto 8px;display:none;align-items:center;gap:8px}
+  .preview img{height:44px;border-radius:8px;border:1px solid var(--border)}
+  .preview .rm{border:0;background:none;color:var(--muted);cursor:pointer;font-size:13px}
+  .msg.user .bubble img{max-width:220px;border-radius:10px;display:block;margin-bottom:6px}
+  .filechip{display:inline-flex;align-items:center;gap:8px;margin-top:10px;
+    border:1px solid var(--border);background:var(--surface);border-radius:10px;
+    padding:8px 12px;color:var(--fg);text-decoration:none;
+    font:12.5px ui-monospace,Consolas,monospace}
+  .filechip:hover{border-color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <div class="mark">H</div><span class="name">Houdry</span>
+  <span class="off" id="netbadge">offline · 127.0.0.1</span>
+</header>
+
+<main id="main">
+  <div class="col" id="thread">
+    <div class="hero" id="hero">
+      <h1>What can I do for you?</h1>
+      <p>Every message is routed to the best local model for the job — automatically.</p>
+      <div class="sugs">
+        <button class="sug">hi</button>
+        <button class="sug">Prove that the square root of 2 is irrational, step by step.</button>
+        <button class="sug">Write a Python function that parses equipment tags like P-101 from text.</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="composer">
+  <div class="preview" id="preview"><img id="previewimg" alt=""><span id="previewname" style="color:var(--muted);font-size:12px"></span><button class="rm" id="rmimg">remove</button></div>
+  <div class="box">
+    <button class="attach" id="attach" aria-label="Attach image" title="Attach a drawing / photo">+</button>
+    <input type="file" id="file" accept="image/png,image/jpeg" style="display:none">
+    <textarea id="input" rows="1" placeholder="Message Houdry… (attach a drawing and ask for a 3D CAD model)"></textarea>
+    <button class="send" id="send" aria-label="Send">↑</button>
+  </div>
+  <div class="hint" id="modelsline">detecting local models…</div>
+</div>
+
+<script>
+(function(){
+  var thread = document.getElementById('thread')
+  var hero = document.getElementById('hero')
+  var input = document.getElementById('input')
+  var send = document.getElementById('send')
+  var main = document.getElementById('main')
+  var history = []   // [{role, content}]
+  var busy = false
+  var pendingImage = null   // {b64, dataUrl, name}
+
+  // ── tiny safe renderer: escape, then fenced code + inline code only ──
+  function esc(s){
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  }
+  function render(md){
+    var parts = md.split('```')
+    var html = ''
+    for (var i=0;i<parts.length;i++){
+      if (i % 2 === 1){
+        var code = parts[i].replace(/^[a-z0-9+-]*\n/i,'')
+        html += '<pre><code>' + esc(code) + '</code></pre>'
+      } else {
+        html += esc(parts[i]).replace(/`([^`\n]+)`/g,'<code>$1</code>')
+      }
+    }
+    return html
+  }
+  function fmtMs(ms){ return ms >= 1000 ? (ms/1000).toFixed(1)+' s' : ms+' ms' }
+
+  function scroll(){ main.scrollTop = main.scrollHeight }
+
+  function addUser(text, img){
+    var d = document.createElement('div')
+    d.className = 'msg user'
+    var b = document.createElement('div'); b.className = 'bubble'
+    if (img){
+      var im = document.createElement('img'); im.src = img.dataUrl; b.appendChild(im)
+    }
+    b.appendChild(document.createTextNode(text))
+    d.appendChild(b)
+    thread.appendChild(d); scroll()
+  }
+
+  function addPending(){
+    var d = document.createElement('div')
+    d.className = 'msg assistant'
+    d.innerHTML = '<div class="meta"><span class="model dots">routing</span></div>' +
+      '<div class="thinkline" style="display:none;color:var(--faint);font-size:12px"></div>' +
+      '<div class="body"></div>'
+    thread.appendChild(d); scroll()
+    return d
+  }
+
+  function fill(el, data){
+    var dec = data.decision || {}
+    var p = dec.profile || {}
+    var m = data.metrics || {}
+    var meta = '<span class="model">' + esc(data.model || '?') + '</span>' +
+      '<span>' + esc(p.complexity || '') + ' ' + (p.score != null ? p.score + '/100' : '') + '</span>' +
+      (m.wall_ms != null ? '<span>' + fmtMs(m.wall_ms) + '</span>' : '') +
+      (m.tokens_per_sec ? '<span>' + m.tokens_per_sec.toFixed(0) + ' tok/s</span>' : '') +
+      (m.output_tokens ? '<span>' + m.output_tokens + ' tok</span>' : '') +
+      (m.load_ms > 500 ? '<span>cold start ' + fmtMs(m.load_ms) + '</span>' : '')
+
+    var routing = ''
+    var hints = p.hints || []
+    var cands = dec.candidates || []
+    if (hints.length || cands.length){
+      routing = '<details><summary>why this model</summary><div class="detailbox">'
+      for (var i=0;i<hints.length;i++) routing += '<div>• ' + esc(hints[i]) + '</div>'
+      for (var j=0;j<cands.length;j++){
+        var c = cands[j]
+        var ref = c.entry.name + (c.entry.tag ? ':' + c.entry.tag : '')
+        routing += '<div class="cand">' + (j+1) + '. <b>' + esc(ref) + '</b> — score ' +
+          c.score + (c.loaded ? ' · loaded' : '') + '</div>'
+      }
+      routing += '</div></details>'
+    }
+    var thought = ''
+    if (data.thought){
+      thought = '<details><summary>thought (' + data.thought.length + ' chars)</summary>' +
+        '<div class="detailbox">' + esc(data.thought) + '</div></details>'
+    }
+    var chip = ''
+    if (data.file && data.file.url){
+      var kb = data.file.size_bytes ? ' · ' + Math.round(data.file.size_bytes/1024) + ' KB' : ''
+      chip = '<a class="filechip" href="' + esc(data.file.url) + '" download>⬇ ' + esc(data.file.name) + kb + '</a>'
+    }
+    el.innerHTML = '<div class="meta">' + meta + '</div>' +
+      '<div class="body">' + render(data.answer || '') + '</div>' + chip + thought + routing
+    scroll()
+  }
+
+  function fail(el, msg){
+    el.innerHTML = '<div class="meta"><span class="model">error</span></div>' +
+      '<div class="err"></div>'
+    el.querySelector('.err').textContent = msg
+    scroll()
+  }
+
+  // Live view of one streaming answer: raw accumulates deltas; <think> blocks
+  // render as a live "thinking" line until the answer proper begins.
+  function liveRender(el, raw){
+    var body = el.querySelector('.body')
+    var think = el.querySelector('.thinkline')
+    var text = raw, note = ''
+    if (raw.lastIndexOf('<think>', 0) === 0){
+      var end = raw.indexOf('</think>')
+      if (end < 0){
+        note = 'thinking… ' + (raw.length - 7) + ' chars'
+        text = ''
+      } else {
+        note = 'thought (' + (end - 7) + ' chars)'
+        text = raw.slice(end + 8)
+      }
+    }
+    think.style.display = note ? '' : 'none'
+    think.textContent = note
+    body.innerHTML = render(text)
+    scroll()
+  }
+
+  function ask(text){
+    if (busy || !text.trim()) return
+    busy = true; send.disabled = true
+    if (hero) { hero.remove(); hero = null }
+    var img = pendingImage; pendingImage = null
+    document.getElementById('preview').style.display = 'none'
+    addUser(text, img)
+    var pending = addPending()
+    var meta = pending.querySelector('.meta')
+    var raw = ''
+    var finished = false
+
+    function handle(ev){
+      if (ev.type === 'decision'){
+        var sel = ev.decision && ev.decision.selected
+        if (sel){
+          var ref = sel.entry.name + (sel.entry.tag ? ':' + sel.entry.tag : '')
+          meta.innerHTML = '<span class="model">' + esc(ref) + '</span>' +
+            '<span class="dots">generating</span>'
+        }
+      } else if (ev.type === 'delta'){
+        raw += ev.delta
+        liveRender(pending, raw)
+      } else if (ev.type === 'retry'){
+        raw = ''
+        liveRender(pending, raw)
+        meta.innerHTML = '<span class="model">' + esc(ev.model || '?') + '</span>' +
+          '<span class="dots">failover, retrying</span>'
+      } else if (ev.type === 'done' && ev.response){
+        finished = true
+        fill(pending, ev.response)
+        history.push({role:'user', content:text})
+        history.push({role:'assistant', content:ev.response.answer || ''})
+      } else if (ev.type === 'error'){
+        finished = true
+        fail(pending, ev.error || 'unknown error')
+      }
+    }
+
+    fetch('/api/chat/stream', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({prompt: text, history: history, keep_alive: '30m', max_tokens: 16384,
+        images: img ? [img.b64] : undefined})
+    }).then(function(res){
+      if (!res.ok || !res.body) throw new Error('HTTP ' + res.status)
+      var reader = res.body.getReader()
+      var dec = new TextDecoder()
+      var buf = ''
+      function pump(){
+        return reader.read().then(function(chunk){
+          if (chunk.done){
+            if (!finished) fail(pending, 'stream ended unexpectedly')
+            busy = false; send.disabled = false; input.focus()
+            return
+          }
+          buf += dec.decode(chunk.value, {stream:true})
+          var idx
+          while ((idx = buf.indexOf('\n\n')) >= 0){
+            var frame = buf.slice(0, idx); buf = buf.slice(idx + 2)
+            var lines = frame.split('\n')
+            for (var i=0;i<lines.length;i++){
+              if (lines[i].lastIndexOf('data: ', 0) === 0){
+                try { handle(JSON.parse(lines[i].slice(6))) } catch(e){}
+              }
+            }
+          }
+          return pump()
+        })
+      }
+      return pump()
+    }).catch(function(e){
+      busy = false; send.disabled = false
+      if (!finished) fail(pending, String(e))
+    })
+  }
+
+  function submit(){
+    var t = input.value.trim()
+    if (!t) return
+    input.value = ''; input.style.height = 'auto'
+    ask(t)
+  }
+
+  var fileInput = document.getElementById('file')
+  document.getElementById('attach').addEventListener('click', function(){ fileInput.click() })
+  fileInput.addEventListener('change', function(){
+    var f = fileInput.files && fileInput.files[0]
+    if (!f) return
+    var r = new FileReader()
+    r.onload = function(){
+      var dataUrl = String(r.result)
+      pendingImage = {dataUrl: dataUrl, b64: dataUrl.split(',')[1], name: f.name}
+      document.getElementById('previewimg').src = dataUrl
+      document.getElementById('previewname').textContent = f.name
+      document.getElementById('preview').style.display = 'flex'
+    }
+    r.readAsDataURL(f)
+    fileInput.value = ''
+  })
+  document.getElementById('rmimg').addEventListener('click', function(){
+    pendingImage = null
+    document.getElementById('preview').style.display = 'none'
+  })
+
+  send.addEventListener('click', submit)
+  input.addEventListener('keydown', function(ev){
+    if (ev.key === 'Enter' && !ev.shiftKey){ ev.preventDefault(); submit() }
+  })
+  input.addEventListener('input', function(){
+    input.style.height = 'auto'
+    input.style.height = Math.min(input.scrollHeight, 180) + 'px'
+  })
+  document.querySelectorAll('.sug').forEach(function(b){
+    b.addEventListener('click', function(){ ask(b.textContent) })
+  })
+
+  fetch('/api/models').then(function(r){ return r.json() }).then(function(d){
+    if (d.error){ document.getElementById('modelsline').textContent = d.error; return }
+    var names = (d.catalog || []).map(function(e){
+      return e.name + (e.tag ? ':' + e.tag : '')
+    })
+    document.getElementById('modelsline').textContent =
+      names.length + ' local model' + (names.length === 1 ? '' : 's') + ': ' + names.join(' · ')
+  }).catch(function(){ /* header hint only */ })
+
+  input.focus()
+})()
+</script>
+</body>
+</html>

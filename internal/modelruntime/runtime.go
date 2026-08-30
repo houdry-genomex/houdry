@@ -44,10 +44,14 @@ func (m Model) Ref() string {
 // Prefer Messages (+ optional Tools) for chat/tool-capable runtimes;
 // Prompt remains the fallback for simple /generate backends.
 type InferRequest struct {
-	Name       string          `json:"name"`
-	Tag        string          `json:"tag,omitempty"`
-	Prompt     string          `json:"prompt"`
-	Messages   []ChatMessage   `json:"messages,omitempty"`
+	Name     string        `json:"name"`
+	Tag      string        `json:"tag,omitempty"`
+	Prompt   string        `json:"prompt"`
+	Messages []ChatMessage `json:"messages,omitempty"`
+	// Images are base64-encoded attachments for vision models. On the prompt
+	// path they ride the request; on the chat path they attach to the final
+	// user message.
+	Images []string `json:"images,omitempty"`
 	Tools      []Tool          `json:"tools,omitempty"`
 	ToolChoice json.RawMessage `json:"tool_choice,omitempty"`
 	Options    InferOptions    `json:"options,omitempty"`

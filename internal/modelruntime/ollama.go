@@ -199,6 +199,9 @@ func (o *Ollama) Infer(ctx context.Context, in InferRequest) (InferResult, error
 		"prompt": in.Prompt,
 		"stream": false,
 	}
+	if len(in.Images) > 0 {
+		bodyMap["images"] = in.Images
+	}
 	// Keep model warm so the next request skips VRAM reload.
 	keepAlive := in.Options.KeepAlive
 	if keepAlive == "" {
@@ -300,6 +303,9 @@ func (o *Ollama) inferChat(ctx context.Context, in InferRequest) (InferResult, e
 		msg := map[string]any{
 			"role":    m.Role,
 			"content": m.Content,
+		}
+		if len(m.Images) > 0 {
+			msg["images"] = m.Images
 		}
 		if m.ToolCallID != "" {
 			msg["tool_call_id"] = m.ToolCallID

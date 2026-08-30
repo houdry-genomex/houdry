@@ -578,10 +578,37 @@ func runRoute(args []string) error {
 	execute := fs.Bool("execute", false, "submit inference after routing")
 	wait := fs.Bool("wait", false, "wait for inference job (implies --execute)")
 	asJSON := fs.Bool("json", false, "print machine-readable JSON")
+	local := fs.Bool("local", false, "route against this machine's Ollama daemon (no fabric needed)")
+	run := fs.Bool("run", false, "with --local: execute the selected model and print its answer")
+	interactive := fs.Bool("interactive", false, "with --local: REPL test bench — type prompts, see routing decisions")
+	web := fs.Bool("web", false, "serve the router test bench as a local web page")
+	addr := fs.String("addr", "127.0.0.1:8090", "listen address for --web")
+	ollamaURL := fs.String("ollama", defaultOllamaURL, "Ollama base URL for --local")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	// A bare positional prompt reads naturally: houdry route --local "hi".
+	if strings.TrimSpace(*prompt) == "" && fs.NArg() > 0 {
+		*prompt = strings.Join(fs.Args(), " ")
+	}
+
+	// Local mode: single-machine routing straight against Ollama — the test
+	// bench for the router itself. No server, no join config.
+	if *local || *interactive || *web {
+		ctx := context.Background()
+		if *web {
+			return runRouteWeb(ctx, *ollamaURL, *addr)
+		}
+		if *interactive {
+			return runRouteInteractive(ctx, *ollamaURL, *run)
+		}
+		if strings.TrimSpace(*prompt) == "" {
+			return errors.New("usage: houdry route --local [--run] \"PROMPT\"  (or --interactive)")
+		}
+		return runLocalRoute(ctx, *ollamaURL, *prompt, *run, *asJSON)
+	}
+
 	if strings.TrimSpace(*prompt) == "" {
 		return errors.New("usage: houdry route --prompt TEXT [--execute] [--wait]")
 	}

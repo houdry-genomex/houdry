@@ -45,6 +45,10 @@ type TaskProfile struct {
 	Complexity   Complexity `json:"complexity"`
 	Capabilities []string   `json:"capabilities"` // e.g. chat, code, reasoning
 	Hints        []string   `json:"hints,omitempty"`
+	// Score is the 0–100 weighted complexity estimate behind Complexity, kept
+	// so interfaces can show *how* hard the analyzer thinks a task is rather
+	// than only the coarse tier.
+	Score int `json:"score"`
 }
 
 // CatalogEntry describes a logical model the router may choose.

@@ -28,6 +28,9 @@ type RouteRequest struct {
 	AllowPull        bool
 	RequirePresent   bool // only models already on a node
 	PreferredRuntime string
+	// ImageAttached forces the vision pipeline regardless of prompt wording:
+	// an attached image IS the task, whatever the caption says.
+	ImageAttached bool
 	// RequireTools restricts selection to models that accept OpenAI-style tools
 	// (Ollama rejects tools on models like tinyllama).
 	RequireTools bool
@@ -46,17 +49,37 @@ func Route(req RouteRequest) Decision {
 		}
 		profile.Hints = append(profile.Hints, "tools requested → tool-capable model required")
 	}
-	d := Decision{Profile: profile}
-
-	if profile.Modality == ModalityVision || profile.Modality == ModalityDocument {
-		d.Deferred = true
-		d.Message = fmt.Sprintf("%s modality requires a later pipeline (OCR/vision); not routed in Phase 5", profile.Modality)
-		return d
+	if req.ImageAttached {
+		profile.Modality = ModalityVision
+		profile.Capabilities = []string{"vision", "ocr", "chat"}
+		if ComplexityRank(profile.Complexity) < ComplexityRank(ComplexityMedium) {
+			profile.Complexity = ComplexityMedium
+		}
+		profile.Hints = append(profile.Hints, "image attached → vision pipeline")
 	}
+	d := Decision{Profile: profile}
 
 	catalog := req.Catalog
 	if len(catalog) == 0 {
 		catalog = DefaultCatalog()
+	}
+
+	// Vision/document tasks need a model that can actually see. With no such
+	// model installed the decision defers loudly instead of letting a blind
+	// text model hallucinate about pixels.
+	if profile.Modality == ModalityVision || profile.Modality == ModalityDocument {
+		hasVision := false
+		for _, entry := range catalog {
+			if hasCap(entry.Capabilities, "vision") {
+				hasVision = true
+				break
+			}
+		}
+		if !hasVision {
+			d.Deferred = true
+			d.Message = "no vision-capable model installed; pull one (e.g. `ollama pull qwen2.5vl:7b`)"
+			return d
+		}
 	}
 
 	var cands []Candidate
@@ -94,8 +117,10 @@ func Route(req RouteRequest) Decision {
 	if len(cands) == 0 {
 		// Best-effort fallback: prefer any present chat model on a READY node
 		// so a single-laptop cluster with only tinyllama still routes.
-		// Never fall back to a non-tool model when tools were requested.
-		if fb := fallbackPresent(profile, catalog, req); fb != nil {
+		// Never fall back to a non-tool model when tools were requested, and
+		// never hand a vision task to a model that cannot see.
+		if fb := fallbackPresent(profile, catalog, req); fb != nil &&
+			profile.Modality != ModalityVision && profile.Modality != ModalityDocument {
 			d.Candidates = []Candidate{*fb}
 			d.Selected = fb
 			d.Message = fmt.Sprintf("fallback %s on %s (no ideal catalog match)", fb.Entry.Ref(), label(*fb))
@@ -240,8 +265,20 @@ func scorePair(entry CatalogEntry, node NodeView, profile TaskProfile, req Route
 	}
 
 	if loaded {
-		score += 80
-		reasons = append(reasons, "model LOADED")
+		// Warmth is a latency bonus, not a mandate: it is tier-scaled so an
+		// already-loaded oversized model never outbids the right-sized one on
+		// trivial work (a warm 14B must not hijack "hi" from a present 1B).
+		warm := 80
+		switch {
+		case diff >= 2:
+			warm = 15
+		case diff == 1:
+			// Below the 25-point right-sizing edge (40 vs 15), so a warm model
+			// one tier up never beats the present exact-tier model.
+			warm = 25
+		}
+		score += warm
+		reasons = append(reasons, fmt.Sprintf("model LOADED (+%d, tier-scaled)", warm))
 	} else if present {
 		score += 25
 		reasons = append(reasons, "model AVAILABLE")
