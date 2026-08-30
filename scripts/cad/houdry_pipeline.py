@@ -150,6 +150,35 @@ def sanitize(code: str) -> str:
     return code
 
 
+def export_mesh(scope: dict, step_path: str) -> str:
+    """Write an STL beside the STEP so viewers have something renderable.
+
+    STEP is a b-rep exchange format — a browser cannot draw it without a
+    geometry kernel. The chat previewer needs a triangle mesh, and OpenCascade
+    is already loaded here, so tessellate once at export time rather than
+    shipping a CAD kernel to the renderer.
+
+    Best-effort: a missing STL costs the preview, not the STEP the user asked
+    for, so failures are reported and swallowed.
+    """
+    stl_path = os.path.splitext(step_path)[0] + ".stl"
+    try:
+        result = scope.get("result")
+        if result is None:
+            print("[houdry-cad] no `result` in scope; skipping STL", flush=True)
+            return ""
+        import cadquery as cq
+
+        # tolerance controls chord error; 0.1 mm is well under the precision
+        # these drawings are dimensioned to and keeps the file small.
+        cq.exporters.export(result, stl_path, tolerance=0.1)
+        print(f"[houdry-cad] STL exported: {stl_path}", flush=True)
+        return stl_path
+    except Exception as e:  # noqa: BLE001 — preview is optional, STEP is not
+        print(f"[houdry-cad] STL export skipped ({type(e).__name__}: {e})", flush=True)
+        return ""
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("image")
@@ -176,6 +205,7 @@ def main() -> int:
             exec(compile(code, "<generated>", "exec"), scope)  # noqa: S102 — that is the tool's job
             if os.path.exists(out) and os.path.getsize(out) > 0:
                 print(f"[houdry-cad] STEP exported: {out}", flush=True)
+                export_mesh(scope, out)
                 return 0
             raise RuntimeError("script ran but exported no STEP file")
         except Exception as e:  # noqa: BLE001 — error text goes back to the model

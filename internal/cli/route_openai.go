@@ -213,13 +213,21 @@ func streamOpenAI(ctx context.Context, w http.ResponseWriter, svc *routerchat.Se
 	flusher.Flush()
 }
 
-// artifactNote appends a markdown link so any OpenAI client can surface the
-// generated file, and a machine-readable tag the desktop app parses to mount
-// its 3D viewer.
+// artifactNote appends a markdown link, so any OpenAI client can surface the
+// generated file, followed by a `::model3d{...}` transcript directive.
+//
+// Houdry Agent renders directives as components inline in the message, which
+// is how the 3D preview mounts. The directive must be its own paragraph and a
+// single line, or the agent's parser correctly ignores it; clients that do not
+// know the name just show one short line of literal text under the link.
 func artifactNote(f *routerchat.Artifact, base string) string {
 	url := base + f.URL
-	return fmt.Sprintf("\n\n[%s](%s)\n\n<houdry-artifact type=\"model/step\" name=%q url=%q size=%d />\n",
-		f.Name, url, f.Name, url, f.SizeBytes)
+	preview := ""
+	if f.PreviewURL != "" {
+		preview = fmt.Sprintf(" preview=%q", base+f.PreviewURL)
+	}
+	return fmt.Sprintf("\n\n[%s](%s)\n\n::model3d{name=%q url=%q%s size=%q}\n",
+		f.Name, url, f.Name, url, preview, fmt.Sprint(f.SizeBytes))
 }
 
 func absoluteFileBase(r *http.Request) string {

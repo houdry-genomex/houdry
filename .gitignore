@@ -14,3 +14,7 @@
 /cad_*.txt
 /.venv/
 *.exe~
+
+# Python bytecode from the CAD pipeline.
+__pycache__/
+*.pyc

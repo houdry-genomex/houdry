@@ -183,6 +183,18 @@ func runCADStream(ctx context.Context, req routerchat.AnswerRequest, filesDir st
 		return fmt.Errorf("cad3dify produced no STEP file\n%s", strings.Join(lastLines, "\n"))
 	}
 
+	// The pipeline tessellates an STL beside the STEP for previewing. It is
+	// best-effort there, so treat it as optional here too.
+	artifact := &routerchat.Artifact{
+		Name:      outName,
+		URL:       "/files/" + outName,
+		SizeBytes: info.Size(),
+	}
+	previewName := strings.TrimSuffix(outName, ".step") + ".stl"
+	if _, err := os.Stat(filepath.Join(filesDir, previewName)); err == nil {
+		artifact.PreviewURL = "/files/" + previewName
+	}
+
 	resp := routerchat.AnswerResponse{
 		Model:  model + " + " + codeModel + " (local CAD pipeline)",
 		Answer: "3D CAD model generated from the drawing. Download the STEP file below and open it in FreeCAD or any CAD tool.",
@@ -190,11 +202,7 @@ func runCADStream(ctx context.Context, req routerchat.AnswerRequest, filesDir st
 			WallMS: time.Since(started).Milliseconds(),
 		},
 		Attempts: 1,
-		File: &routerchat.Artifact{
-			Name:      outName,
-			URL:       "/files/" + outName,
-			SizeBytes: info.Size(),
-		},
+		File:     artifact,
 	}
 	emit(routerchat.StreamEvent{Type: "done", Response: &resp})
 	return nil

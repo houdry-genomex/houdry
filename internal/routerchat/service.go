@@ -118,6 +118,11 @@ type Artifact struct {
 	Name      string `json:"name"`
 	URL       string `json:"url"`
 	SizeBytes int64  `json:"size_bytes,omitempty"`
+	// PreviewURL points at a renderable mesh (STL) of the same model, when one
+	// could be tessellated. The primary artifact is STEP, which a browser
+	// cannot draw without a geometry kernel; clients that show a 3D preview
+	// load this instead. Empty when no mesh was produced.
+	PreviewURL string `json:"preview_url,omitempty"`
 }
 
 // Service routes prompts and executes them. Safe for concurrent use.
