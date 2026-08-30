@@ -14,15 +14,24 @@ Usage:
 
 import argparse
 import base64
+import io
 import json
 import os
 import re
 import sys
+import urllib.error
 import urllib.request
 
 OLLAMA = os.environ.get("HOUDRY_OLLAMA_BASE", "http://127.0.0.1:11434")
 VISION_MODEL = os.environ.get("HOUDRY_VISION_MODEL", "qwen2.5vl:7b")
 CODE_MODEL = os.environ.get("HOUDRY_CODE_MODEL", "llama3.1:8b")
+
+# Context the models are given. Large enough for a downscaled drawing plus the
+# cheatsheet and a repair traceback; small enough to stay in VRAM alongside the
+# two models this pipeline keeps warm.
+NUM_CTX = int(os.environ.get("HOUDRY_NUM_CTX", "16384"))
+# Long edge, in pixels, the drawing is resized down to before the vision pass.
+MAX_IMAGE_EDGE = int(os.environ.get("HOUDRY_MAX_IMAGE_EDGE", "1280"))
 
 DESCRIBE_PROMPT = (
     "You are reading a 2D engineering drawing. Describe the part precisely for a CAD engineer:\n"
@@ -98,15 +107,54 @@ Error:
 
 
 def ollama(model: str, prompt: str, images=None, timeout=1500) -> str:
+    # num_ctx must be set explicitly. Ollama defaults to 4096, which nothing
+    # here fits in: a drawing costs ~1-4k vision tokens on its own, and the
+    # cheatsheet + description + a failing traceback comfortably exceed it on
+    # the repair pass. Without this the daemon rejects the request outright
+    # (400 exceed_context_size_error) rather than truncating.
     body = {"model": model, "prompt": prompt, "stream": False,
-            "options": {"temperature": 0.2, "num_predict": 8192}, "keep_alive": "30m"}
+            "options": {"temperature": 0.2, "num_predict": 8192, "num_ctx": NUM_CTX},
+            "keep_alive": "30m"}
     if images:
         body["images"] = images
     req = urllib.request.Request(
         OLLAMA + "/api/generate", data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read())["response"]
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())["response"]
+    except urllib.error.HTTPError as e:
+        # urllib's default message is just "Bad Request"; the daemon puts the
+        # actual reason in the body, so surface it or debugging is guesswork.
+        raise RuntimeError(f"ollama {model} returned {e.code}: "
+                           f"{e.read().decode('utf-8', 'replace')[:500]}") from None
+
+
+def load_image_b64(path: str) -> str:
+    """Read an image, downscaling it to something a vision model can afford.
+
+    A phone photo or a 4K scan costs thousands of vision tokens and slows the
+    describe pass by minutes, while adding no legible detail: dimension text on
+    an engineering drawing is readable well below this cap. Pillow is already a
+    cadquery dependency, so this costs no extra install; if it is somehow
+    missing, the raw bytes are still better than failing.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return base64.b64encode(open(path, "rb").read()).decode()
+
+    with Image.open(path) as im:
+        im = im.convert("RGB")
+        if max(im.size) > MAX_IMAGE_EDGE:
+            scale = MAX_IMAGE_EDGE / max(im.size)
+            new_size = (max(1, round(im.width * scale)), max(1, round(im.height * scale)))
+            print(f"[houdry-cad] downscaling {im.width}x{im.height} -> "
+                  f"{new_size[0]}x{new_size[1]}", flush=True)
+            im = im.resize(new_size, Image.LANCZOS)
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG", quality=90)
+        return base64.b64encode(buf.getvalue()).decode()
 
 
 def coach(err: str) -> str:
@@ -187,7 +235,7 @@ def main() -> int:
     args = ap.parse_args()
 
     out = os.path.abspath(args.output_filepath).replace(os.sep, "/")
-    img_b64 = base64.b64encode(open(args.image, "rb").read()).decode()
+    img_b64 = load_image_b64(args.image)
 
     print(f"[houdry-cad] describing drawing with {VISION_MODEL} ...", flush=True)
     description = strip_think(ollama(VISION_MODEL, DESCRIBE_PROMPT, images=[img_b64]))
