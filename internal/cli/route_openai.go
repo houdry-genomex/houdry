@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"regexp"
 	"strings"
 
 	"houdry/internal/openaicompat"
@@ -80,8 +82,24 @@ func registerOpenAICompat(mux *http.ServeMux, svc *routerchat.Service, filesDir 
 			return
 		}
 
+		// A path typed in the message counts as an attachment; see
+		// imagesFromPrompt for why this is load-bearing for CAD.
+		if len(answerReq.Images) == 0 {
+			answerReq.Images = imagesFromPrompt(answerReq.Prompt)
+		}
+
 		id := "chatcmpl-" + randomID()
-		isCAD := len(answerReq.Images) > 0 && cadIntent(answerReq.Prompt)
+		wantsCAD := cadIntent(answerReq.Prompt)
+		isCAD := len(answerReq.Images) > 0 && wantsCAD
+
+		// Asked for a 3D model with no usable image. Answer directly instead of
+		// handing the turn to a chat model: it cannot see, cannot run the
+		// pipeline, and small models respond to that gap by inventing tools and
+		// fabricating a result, which reads as success to the user.
+		if wantsCAD && len(answerReq.Images) == 0 {
+			writeCADNeedsImage(w, req.Stream, id)
+			return
+		}
 
 		if req.Stream {
 			streamOpenAI(r.Context(), w, svc, answerReq, id, isCAD, filesDir, absoluteFileBase(r))
@@ -128,6 +146,54 @@ func registerOpenAICompat(mux *http.ServeMux, svc *routerchat.Service, filesDir 
 		openaicompat.WriteJSON(w, http.StatusOK,
 			openaicompat.BuildCompletion(id, model, content, 0, 0))
 	})
+}
+
+const cadNeedsImageMessage = "I can build a real 3D model, but I need the drawing itself — " +
+	"I can't see one in this message.\n\n" +
+	"Attach the image, or paste its full path (for example " +
+	"`C:\\Users\\you\\Desktop\\part.jpg`) and I'll run it through the CAD " +
+	"pipeline and show you the model inline.\n\n" +
+	"Note on what this produces: it reads **2D engineering drawings** — " +
+	"outlines, dimension callouts, hole sizes, orthographic views — and " +
+	"outputs a solid STEP part. Photographs, screenshots and architecture " +
+	"diagrams aren't dimensioned geometry, so they won't yield a meaningful part."
+
+// writeCADNeedsImage answers a CAD request that arrived without a drawing.
+// Written in both response shapes so a streaming client sees it in the
+// transcript like any other reply.
+func writeCADNeedsImage(w http.ResponseWriter, stream bool, id string) {
+	if !stream {
+		openaicompat.WriteJSON(w, http.StatusOK,
+			openaicompat.BuildCompletion(id, "houdry-cad", cadNeedsImageMessage, 0, 0))
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		openaicompat.WriteJSON(w, http.StatusOK,
+			openaicompat.BuildCompletion(id, "houdry-cad", cadNeedsImageMessage, 0, 0))
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	send := func(delta map[string]any, finish any) {
+		payload, err := json.Marshal(map[string]any{
+			"id": id, "object": openaicompat.ObjectChatCompletionChunk,
+			"created": 0, "model": "houdry-cad",
+			"choices": []map[string]any{{"index": 0, "delta": delta, "finish_reason": finish}},
+		})
+		if err != nil {
+			return
+		}
+		fmt.Fprintf(w, "data: %s\n\n", payload)
+		flusher.Flush()
+	}
+	send(map[string]any{"role": "assistant", "content": cadNeedsImageMessage}, nil)
+	send(map[string]any{}, "stop")
+	fmt.Fprint(w, "data: [DONE]\n\n")
+	flusher.Flush()
 }
 
 // streamOpenAI relays routerchat events as chat.completion.chunk SSE frames.
@@ -289,6 +355,46 @@ func imagesFromMessages(msgs []openaicompat.Message) []string {
 				images = append(images, b64)
 			}
 		}
+	}
+	return images
+}
+
+// localImagePathRE matches an absolute path to an image file — Windows
+// (C:\dir\pic.jpg, C:/dir/pic.jpg) or POSIX (/home/me/pic.jpg).
+var localImagePathRE = regexp.MustCompile(
+	`(?i)([A-Za-z]:[\\/][^"'<>|?*\r\n]+?|/[^\s"'<>|?*\r\n]+?)\.(jpe?g|png|webp|bmp|tiff?)\b`)
+
+// maxLocalImageBytes caps what a single referenced file may contribute. The
+// pipeline downscales anyway; this only stops a stray path to a huge file from
+// being slurped into memory.
+const maxLocalImageBytes = 64 << 20
+
+// imagesFromPrompt loads images the user referred to by path in their message.
+//
+// People paste "make a 3D model of C:\...\part.jpg" rather than attaching a
+// file, and without this the request has no images at all: CAD intent detection
+// fails and the turn falls through to a chat model, which will cheerfully
+// invent a result instead of admitting it cannot see the file. Reading from
+// the local disk keeps the on-premise guarantee intact — unlike the http(s)
+// case in decodeImagePayload, nothing leaves the machine.
+func imagesFromPrompt(prompt string) []string {
+	var images []string
+	seen := map[string]bool{}
+	for _, match := range localImagePathRE.FindAllString(prompt, -1) {
+		path := strings.Trim(strings.TrimSpace(match), `"'`)
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() || info.Size() > maxLocalImageBytes {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		images = append(images, base64.StdEncoding.EncodeToString(data))
 	}
 	return images
 }
