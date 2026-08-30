@@ -12,3 +12,4 @@
 # routed-chat artifacts and local CAD debug logs
 /generated/
 /cad_*.txt
+/.venv/

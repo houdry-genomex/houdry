@@ -1,0 +1,8 @@
+# CAD pipeline dependencies. cadquery pulls in the OpenCascade geometry kernel
+# (cadquery-ocp, ~400 MB) — these are the only non-stdlib requirements.
+cadquery==2.4.0
+
+# cadquery 2.4.0 depends on nptyping, which still references np.bool8. That
+# alias was removed in numpy 2.x, so an unpinned install fails at import with
+# "module 'numpy' has no attribute 'bool8'". Pin numpy to the last 1.x.
+numpy<2

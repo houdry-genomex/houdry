@@ -15,10 +15,12 @@ import (
 )
 
 // The CAD pipeline is a routed TOOL, not a model: an attached drawing plus
-// CAD intent bypasses plain vision chat and drives cad3dify (MIT, neka-nat),
-// which generates CadQuery code with the local vision model and executes it
-// into a STEP file. Everything stays on this machine: the vision model runs
-// on Ollama and the geometry kernel is local OpenCascade.
+// CAD intent bypasses plain vision chat and runs scripts/cad/houdry_pipeline.py,
+// which reads the drawing with the local vision model, writes CadQuery with the
+// local code model, and executes it into a STEP file. Everything stays on this
+// machine: inference runs on Ollama and the geometry kernel is local
+// OpenCascade. The approach is inspired by cad3dify (MIT, neka-nat), but the
+// pipeline depends only on cadquery — see scripts/cad/README.md.
 
 // cadIntentTerms deliberately avoids the bare word "step" — "step by step"
 // is reasoning vocabulary, not CAD vocabulary.
@@ -45,33 +47,75 @@ func cadIntent(prompt string) bool {
 	return false
 }
 
-// cad3difyDir resolves the cad3dify checkout (sibling of this repo by default).
-func cad3difyDir() (string, error) {
-	dir := os.Getenv("HOUDRY_CAD3DIFY_DIR")
-	if dir == "" {
-		dir = filepath.Join("..", "cad3dify")
+// cadScript locates scripts/cad/houdry_pipeline.py, which ships in this repo.
+// It is looked up relative to the working directory first and to the binary
+// second, so `go run`, `./houdry` and an installed binary all resolve it.
+func cadScript() (string, error) {
+	if p := os.Getenv("HOUDRY_CAD_SCRIPT"); p != "" {
+		return filepath.Abs(p)
 	}
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return "", err
+	rel := filepath.Join("scripts", "cad", "houdry_pipeline.py")
+	roots := []string{"."}
+	if exe, err := os.Executable(); err == nil {
+		roots = append(roots, filepath.Dir(exe))
 	}
-	if _, err := os.Stat(filepath.Join(abs, "scripts", "houdry_pipeline.py")); err != nil {
-		return "", fmt.Errorf("cad3dify not found at %s (set HOUDRY_CAD3DIFY_DIR)", abs)
+	for _, root := range roots {
+		candidate, err := filepath.Abs(filepath.Join(root, rel))
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
 	}
-	return abs, nil
+	return "", fmt.Errorf("%s not found — run from the repo root or set HOUDRY_CAD_SCRIPT", rel)
+}
+
+// cadPython resolves the interpreter that has cadquery installed: the repo's
+// own .venv (created by scripts/cad/setup), else an explicit override, else
+// whatever python is on PATH.
+func cadPython() (string, error) {
+	if p := os.Getenv("HOUDRY_CAD_PYTHON"); p != "" {
+		return p, nil
+	}
+	venvRelative := []string{
+		filepath.Join(".venv", "Scripts", "python.exe"), // Windows
+		filepath.Join(".venv", "bin", "python"),         // Linux/macOS
+	}
+	roots := []string{"."}
+	if exe, err := os.Executable(); err == nil {
+		roots = append(roots, filepath.Dir(exe))
+	}
+	for _, root := range roots {
+		for _, rel := range venvRelative {
+			candidate, err := filepath.Abs(filepath.Join(root, rel))
+			if err != nil {
+				continue
+			}
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, nil
+			}
+		}
+	}
+	for _, name := range []string{"python3", "python"} {
+		if p, err := exec.LookPath(name); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("no python with cadquery found — see scripts/cad/README.md (or set HOUDRY_CAD_PYTHON)")
 }
 
 // runCADStream executes the drawing→STEP pipeline, streaming cad3dify's own
 // progress log as chat deltas and finishing with a downloadable artifact.
 func runCADStream(ctx context.Context, req routerchat.AnswerRequest, filesDir string, emit func(routerchat.StreamEvent)) error {
 	started := time.Now()
-	dir, err := cad3difyDir()
+	script, err := cadScript()
 	if err != nil {
 		return err
 	}
-	venvPython := filepath.Join(dir, ".venv", "Scripts", "python.exe")
-	if _, err := os.Stat(venvPython); err != nil {
-		return fmt.Errorf("cad3dify venv missing at %s — run its install first", venvPython)
+	python, err := cadPython()
+	if err != nil {
+		return err
 	}
 
 	raw, err := base64.StdEncoding.DecodeString(req.Images[0])
@@ -86,11 +130,11 @@ func runCADStream(ctx context.Context, req routerchat.AnswerRequest, filesDir st
 	outName := "model-" + stamp + ".step"
 	outPath := filepath.Join(filesDir, outName)
 
-	model := os.Getenv("CAD3DIFY_OLLAMA_MODEL")
+	model := os.Getenv("HOUDRY_VISION_MODEL")
 	if model == "" {
 		model = "qwen2.5vl:7b"
 	}
-	codeModel := os.Getenv("CAD3DIFY_CODE_MODEL")
+	codeModel := os.Getenv("HOUDRY_CODE_MODEL")
 	if codeModel == "" {
 		codeModel = "llama3.1:8b"
 	}
@@ -99,10 +143,12 @@ func runCADStream(ctx context.Context, req routerchat.AnswerRequest, filesDir st
 
 	runCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, venvPython, filepath.Join("scripts", "houdry_pipeline.py"),
-		imgPath, "--output_filepath", outPath)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "CAD3DIFY_OLLAMA_MODEL="+model, "PYTHONIOENCODING=utf-8")
+	cmd := exec.CommandContext(runCtx, python, script, imgPath, "--output_filepath", outPath)
+	cmd.Dir = filepath.Dir(filepath.Dir(filepath.Dir(script))) // repo root
+	cmd.Env = append(os.Environ(),
+		"HOUDRY_VISION_MODEL="+model,
+		"HOUDRY_CODE_MODEL="+codeModel,
+		"PYTHONIOENCODING=utf-8")
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

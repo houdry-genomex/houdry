@@ -5,6 +5,28 @@ Wired into the routed chat: attaching an image whose prompt shows CAD intent
 (see `cadIntent` in `internal/cli/route_cad.go`) runs this instead of plain
 vision chat, and streams the pipeline log as chat deltas.
 
+Self-contained — the only dependency is `cadquery`. The approach is inspired by
+[cad3dify](https://github.com/neka-nat/cad3dify) (MIT, neka-nat), but no code or
+checkout from it is required.
+
+## Setup
+
+```bash
+bash scripts/cad/setup.sh      # creates .venv and installs cadquery
+```
+
+Then, at runtime, you also need:
+
+1. **Ollama** running — https://ollama.com
+2. **The two models pulled:**
+   ```bash
+   ollama pull qwen2.5vl:7b    # reads the drawing (~6 GB)
+   ollama pull llama3.1:8b     # writes the CadQuery code (~4.9 GB)
+   ```
+
+No API keys, no network calls — inference is on Ollama over loopback and the
+geometry kernel (OpenCascade) is local.
+
 ## Why two models
 
 A small vision model can read a drawing but writes poor CadQuery; a code model
@@ -34,30 +56,19 @@ patterns that cannot fail that way:
 Trade-off: models come out dimensionally correct but omit cosmetic fillets and
 chamfers. That is deliberate — reliability over cosmetic edges.
 
-## Setup
-
-The pipeline runs against a [cad3dify](https://github.com/neka-nat/cad3dify)
-(MIT) checkout, expected as a sibling of this repo (override with
-`HOUDRY_CAD3DIFY_DIR`):
-
-```bash
-git clone https://github.com/neka-nat/cad3dify.git ../cad3dify
-cd ../cad3dify
-python -m venv .venv && .venv/Scripts/pip install -e . cadquery
-git apply /path/to/houdry/scripts/cad/cad3dify-ollama.patch   # adds Ollama provider
-cp /path/to/houdry/scripts/cad/houdry_pipeline.py scripts/
-```
-
-`cad3dify-ollama.patch` teaches cad3dify an `ollama` model type pointing at the
-local OpenAI-compatible endpoint; `houdry_pipeline.py` is the two-model driver
-and does not depend on cad3dify's own chains.
-
 ## Run standalone
 
 ```bash
-.venv/Scripts/python scripts/houdry_pipeline.py drawing.jpg \
-  --output_filepath model.step
+.venv/Scripts/python scripts/cad/houdry_pipeline.py drawing.jpg \
+  --output_filepath model.step        # .venv/bin/python on Linux/macOS
 ```
 
-Env: `CAD3DIFY_OLLAMA_BASE` (default `http://127.0.0.1:11434`),
-`CAD3DIFY_OLLAMA_MODEL` (vision), `CAD3DIFY_CODE_MODEL` (code).
+## Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `HOUDRY_OLLAMA_BASE` | `http://127.0.0.1:11434` | Ollama endpoint |
+| `HOUDRY_VISION_MODEL` | `qwen2.5vl:7b` | Reads the drawing |
+| `HOUDRY_CODE_MODEL` | `llama3.1:8b` | Writes the CadQuery |
+| `HOUDRY_CAD_PYTHON` | repo `.venv`, else PATH | Interpreter with cadquery |
+| `HOUDRY_CAD_SCRIPT` | `scripts/cad/houdry_pipeline.py` | Pipeline location |

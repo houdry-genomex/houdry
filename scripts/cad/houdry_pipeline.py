@@ -1,10 +1,12 @@
 """Houdry two-model CAD pipeline (fully local).
 
-A small vision model can read a drawing but writes poor CadQuery; a strong
-reasoning model writes good code but cannot see. So: qwen2.5-vl DESCRIBES the
-drawing (shapes, dimensions, holes), deepseek-r1 WRITES the CadQuery code from
-that description, and an execute-with-error-feedback loop repairs it. All
-calls go to the loopback Ollama daemon.
+A small vision model can read a drawing but writes poor CadQuery; a code model
+writes usable CadQuery but cannot see. So: qwen2.5-vl DESCRIBES the drawing
+(shapes, dimensions, holes), llama3.1 WRITES the CadQuery code from that
+description, and an execute-with-error-feedback loop repairs it. All calls go
+to the loopback Ollama daemon; the only dependency is cadquery.
+
+Inspired by cad3dify (MIT, neka-nat) but self-contained.
 
 Usage:
   python houdry_pipeline.py <image> --output_filepath out.step
@@ -18,9 +20,9 @@ import re
 import sys
 import urllib.request
 
-OLLAMA = os.environ.get("CAD3DIFY_OLLAMA_BASE", "http://127.0.0.1:11434")
-VISION_MODEL = os.environ.get("CAD3DIFY_OLLAMA_MODEL", "qwen2.5vl:7b")
-CODE_MODEL = os.environ.get("CAD3DIFY_CODE_MODEL", "llama3.1:8b")
+OLLAMA = os.environ.get("HOUDRY_OLLAMA_BASE", "http://127.0.0.1:11434")
+VISION_MODEL = os.environ.get("HOUDRY_VISION_MODEL", "qwen2.5vl:7b")
+CODE_MODEL = os.environ.get("HOUDRY_CODE_MODEL", "llama3.1:8b")
 
 DESCRIBE_PROMPT = (
     "You are reading a 2D engineering drawing. Describe the part precisely for a CAD engineer:\n"
