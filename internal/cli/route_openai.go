@@ -286,14 +286,22 @@ func streamOpenAI(ctx context.Context, w http.ResponseWriter, svc *routerchat.Se
 // is how the 3D preview mounts. The directive must be its own paragraph and a
 // single line, or the agent's parser correctly ignores it; clients that do not
 // know the name just show one short line of literal text under the link.
+//
+// The directive carries `origin` plus root-relative paths rather than absolute
+// URLs. A bare "http://..." inside the attributes is autolinked by the
+// agent's GFM pipeline before the directive is recognised, which turns the
+// paragraph into markup, disqualifies it as a directive, and leaves the user
+// looking at prose with prettified link labels instead of a 3D preview.
+// Nothing here may be autolinkable: no scheme, no "www.".
 func artifactNote(f *routerchat.Artifact, base string) string {
 	url := base + f.URL
 	preview := ""
 	if f.PreviewURL != "" {
-		preview = fmt.Sprintf(" preview=%q", base+f.PreviewURL)
+		preview = fmt.Sprintf(" preview=%q", f.PreviewURL)
 	}
-	return fmt.Sprintf("\n\n[%s](%s)\n\n::model3d{name=%q url=%q%s size=%q}\n",
-		f.Name, url, f.Name, url, preview, fmt.Sprint(f.SizeBytes))
+	return fmt.Sprintf("\n\n[%s](%s)\n\n::model3d{name=%q origin=%q url=%q%s size=%q}\n",
+		f.Name, url, f.Name, strings.TrimPrefix(strings.TrimPrefix(base, "http://"), "https://"),
+		f.URL, preview, fmt.Sprint(f.SizeBytes))
 }
 
 func absoluteFileBase(r *http.Request) string {
