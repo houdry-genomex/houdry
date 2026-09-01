@@ -20,8 +20,10 @@ func TestReleaseCLISurface(t *testing.T) {
 		"houdry node list",
 		"houdry job submit",
 		"houdry serve",
+		"houdry discover",
 		"houdry version",
 		"houdry gpu detect",
+		"houdry gpu register",
 	}
 	for _, want := range required {
 		if !strings.Contains(usage, want) {
@@ -42,6 +44,16 @@ func TestReleaseCLISurface(t *testing.T) {
 	}
 	if !strings.HasPrefix(version.Version, "0.6.") {
 		t.Fatalf("expected 0.6.x release line, got %q", version.Version)
+	}
+}
+
+func TestRouteWebRemoved(t *testing.T) {
+	err := Run([]string{"route", "--web"})
+	if err == nil {
+		t.Fatal("expected --web to be removed")
+	}
+	if !strings.Contains(err.Error(), "houdry serve") {
+		t.Fatalf("error should point at serve, got %v", err)
 	}
 }
 

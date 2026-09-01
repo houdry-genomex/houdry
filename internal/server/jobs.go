@@ -225,6 +225,13 @@ func (js *JobStore) CountByStatus(status string) int {
 // FailRunningForNode fails in-flight jobs when a node goes offline.
 // Phase 3 does not migrate work.
 func (js *JobStore) FailRunningForNode(nodeID, errMsg string) int {
+	return js.FailRunningExcept(nodeID, "", errMsg)
+}
+
+// FailRunningExcept fails running/pending jobs for nodeID except keepJobID
+// (the job the worker says it is still executing). An empty keepJobID fails
+// all of them — used on join after a worker restart.
+func (js *JobStore) FailRunningExcept(nodeID, keepJobID, errMsg string) int {
 	js.mu.Lock()
 	defer js.mu.Unlock()
 	n := 0
@@ -234,6 +241,9 @@ func (js *JobStore) FailRunningForNode(nodeID, errMsg string) int {
 			continue
 		}
 		if j.Status != JobRunning && j.Status != JobPending {
+			continue
+		}
+		if keepJobID != "" && j.ID == keepJobID {
 			continue
 		}
 		j.Status = JobFailed

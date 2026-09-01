@@ -12,7 +12,7 @@ import (
 type NodeView struct {
 	NodeID        string
 	Host          string
-	Status        string // must be READY to be selected
+	Status        string // READY, or BUSY when AllowBusy is set
 	ModelRuntimes []string
 	Models        []modelruntime.Model
 	VRAMTotal     uint64 // best-effort; 0 = unknown
@@ -34,6 +34,9 @@ type RouteRequest struct {
 	// RequireTools restricts selection to models that accept OpenAI-style tools
 	// (Ollama rejects tools on models like tinyllama).
 	RequireTools bool
+	// AllowBusy includes BUSY nodes so a single-node cluster can still pick a
+	// VRAM-fitting model while the current job finishes (the job stays queued).
+	AllowBusy bool
 }
 
 // Route picks the best (model, node) pair for a prompt.
@@ -94,7 +97,7 @@ func Route(req RouteRequest) Decision {
 			continue
 		}
 		for _, node := range req.Nodes {
-			if !strings.EqualFold(node.Status, "READY") {
+			if !nodeEligible(node.Status, req.AllowBusy) {
 				continue
 			}
 			c, ok := scorePair(entry, node, profile, req)
@@ -150,7 +153,7 @@ func fallbackPresent(profile TaskProfile, catalog []CatalogEntry, req RouteReque
 			continue
 		}
 		for _, node := range req.Nodes {
-			if !strings.EqualFold(node.Status, "READY") {
+			if !nodeEligible(node.Status, req.AllowBusy) {
 				continue
 			}
 			id := modelruntime.Identity{Name: entry.Name, Tag: entry.Tag, Runtime: entry.Runtime}
@@ -290,6 +293,10 @@ func scorePair(entry CatalogEntry, node NodeView, profile TaskProfile, req Route
 	if req.PreferLoaded && !loaded {
 		score -= 10
 	}
+	if strings.EqualFold(node.Status, "BUSY") {
+		score -= 50
+		reasons = append(reasons, "node BUSY (will queue)")
+	}
 
 	score += entry.Priority
 	c.Score = score
@@ -313,4 +320,68 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+func nodeEligible(status string, allowBusy bool) bool {
+	if strings.EqualFold(status, "READY") {
+		return true
+	}
+	return allowBusy && strings.EqualFold(status, "BUSY")
+}
+
+// PickFittingModel chooses the smallest present model that fits the node's
+// available VRAM. When tools is true, models that cannot accept tools are skipped.
+// Returns empty strings when nothing on the node both fits and matches.
+func PickFittingModel(node NodeView, tools bool, catalog []CatalogEntry) (name, tag string) {
+	if len(catalog) == 0 {
+		catalog = DefaultCatalog()
+	}
+	avail := node.VRAMAvailable
+	if avail == 0 {
+		avail = node.VRAMTotal
+	}
+	type cand struct {
+		name, tag string
+		minVRAM   uint64
+		size      uint64
+	}
+	var best *cand
+	for _, m := range node.Models {
+		if strings.TrimSpace(m.Name) == "" {
+			continue
+		}
+		entry := CatalogEntry{Name: m.Name, Tag: m.Tag}
+		for _, c := range catalog {
+			if strings.EqualFold(c.Name, m.Name) && strings.EqualFold(c.Tag, m.Tag) {
+				entry = c
+				break
+			}
+		}
+		if tools && !EntrySupportsTools(entry) {
+			continue
+		}
+		minVRAM := entry.MinVRAMBytes
+		if minVRAM == 0 {
+			minVRAM = m.SizeBytes
+		}
+		if avail > 0 && minVRAM > 0 && avail < minVRAM {
+			continue
+		}
+		if avail > 0 && m.SizeBytes > 0 && avail < m.SizeBytes {
+			continue
+		}
+		size := m.SizeBytes
+		if size == 0 {
+			size = minVRAM
+		}
+		c := cand{name: m.Name, tag: m.Tag, minVRAM: minVRAM, size: size}
+		if best == nil || c.size < best.size || (c.size == best.size && c.minVRAM < best.minVRAM) {
+			cp := c
+			best = &cp
+		}
+	}
+	if best == nil {
+		return "", ""
+	}
+	return best.name, best.tag
 }

@@ -38,10 +38,10 @@ func nodesToViews(nodes []Node) []routing.NodeView {
 }
 
 func (s *Server) routePrompt(prompt string, preferRuntime string, requirePresent bool) routing.Decision {
-	return s.routePromptOpts(prompt, preferRuntime, requirePresent, false)
+	return s.routePromptOpts(prompt, preferRuntime, requirePresent, false, false)
 }
 
-func (s *Server) routePromptOpts(prompt string, preferRuntime string, requirePresent, requireTools bool) routing.Decision {
+func (s *Server) routePromptOpts(prompt string, preferRuntime string, requirePresent, requireTools, allowBusy bool) routing.Decision {
 	catalog, err := s.loadCatalog()
 	if err != nil {
 		catalog = routing.DefaultCatalog()
@@ -55,5 +55,6 @@ func (s *Server) routePromptOpts(prompt string, preferRuntime string, requirePre
 		RequirePresent:   requirePresent,
 		PreferredRuntime: preferRuntime,
 		RequireTools:     requireTools,
+		AllowBusy:        allowBusy,
 	})
 }

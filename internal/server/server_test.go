@@ -76,8 +76,24 @@ func TestJoinAndList(t *testing.T) {
 	if !strings.Contains(body, ts.URL) {
 		t.Fatalf("install.sh missing server url: %s", body[:min(200, len(body))])
 	}
-	if !strings.Contains(body, "houdry node join") {
-		t.Fatal("install.sh missing node join instructions")
+	if !strings.Contains(body, "houdry gpu register") {
+		t.Fatal("install.sh missing gpu register instructions")
+	}
+
+	resp, err = http.Get(ts.URL + "/.well-known/houdry.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatal(resp.Status)
+	}
+	var meta map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta["houdry"] != "control-plane" {
+		t.Fatalf("%v", meta)
 	}
 }
 
@@ -152,5 +168,36 @@ func TestJoinJSONRoundTrip(t *testing.T) {
 	}
 	if out.GPUs[0].Vendor != gpu.VendorIntel {
 		t.Fatal(out)
+	}
+}
+
+func TestGeneratedFilesAreServed(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(Options{DataDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	path := filepath.Join(dir, "generated", "model.step")
+	if err := os.WriteFile(path, []byte("ISO-10303-21;"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/files/model.step")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatal(resp.Status)
+	}
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "ISO-10303-21;" {
+		t.Fatalf("got %q", b)
 	}
 }

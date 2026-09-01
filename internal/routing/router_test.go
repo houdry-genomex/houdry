@@ -108,6 +108,45 @@ func TestRouteToolsAvoidsTinyllama(t *testing.T) {
 	}
 }
 
+func TestRouteBusy4GBPicks15bNot7b(t *testing.T) {
+	nodes := []NodeView{{
+		NodeID: "n1", Host: "laptop", Status: "BUSY",
+		ModelRuntimes: []string{"ollama"},
+		Models: []modelruntime.Model{
+			{Name: "qwen2.5-coder", Tag: "7b", Runtime: "ollama", State: modelruntime.StateAvailable, SizeBytes: 4683087561},
+			{Name: "qwen2.5-coder", Tag: "1.5b", Runtime: "ollama", State: modelruntime.StateAvailable, SizeBytes: 986062089},
+			{Name: "tinyllama", Tag: "latest", Runtime: "ollama", State: modelruntime.StateAvailable},
+		},
+		VRAMTotal: 4 << 30, VRAMAvailable: 4 << 30,
+	}}
+	d := Route(RouteRequest{
+		Prompt: "what is the capital of france?", Catalog: DefaultCatalog(), Nodes: nodes,
+		PreferLoaded: true, AllowPull: false, RequirePresent: true, RequireTools: true, AllowBusy: true,
+	})
+	if d.Selected == nil {
+		t.Fatalf("expected a selection on BUSY node: %+v", d)
+	}
+	if d.Selected.Entry.Name != "qwen2.5-coder" || d.Selected.Entry.Tag != "1.5b" {
+		t.Fatalf("expected 1.5b on 4GiB, got %s", d.Selected.Entry.Ref())
+	}
+}
+
+func TestPickFittingModelSkips7bOn4GB(t *testing.T) {
+	node := NodeView{
+		Status: "BUSY",
+		Models: []modelruntime.Model{
+			{Name: "qwen2.5-coder", Tag: "7b", SizeBytes: 4683087561},
+			{Name: "qwen2.5-coder", Tag: "1.5b", SizeBytes: 986062089},
+			{Name: "tinyllama", Tag: "latest"},
+		},
+		VRAMTotal: 4 << 30, VRAMAvailable: 4 << 30,
+	}
+	name, tag := PickFittingModel(node, true, DefaultCatalog())
+	if name != "qwen2.5-coder" || tag != "1.5b" {
+		t.Fatalf("got %s:%s, want qwen2.5-coder:1.5b", name, tag)
+	}
+}
+
 func TestRouteToolsNoFallbackToTinyllama(t *testing.T) {
 	nodes := []NodeView{{
 		NodeID: "n1", Status: "READY", ModelRuntimes: []string{"ollama"},

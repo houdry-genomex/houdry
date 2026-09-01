@@ -4,8 +4,8 @@ Houdry ships a **single multi-platform CLI** via GitHub Releases. Friends instal
 that binary with the existing public installers — they do **not** need to clone
 the repo.
 
-Current release line: **v0.6.0** (Phases 1–6: GPU fabric, node agent, scheduling,
-model runtime, routing, OpenAI-compatible chat completions).
+Current release line: **v0.6.1** (LAN control plane, Agent talks only to `houdry serve`,
+GPU workers, routing, OpenAI-compatible chat completions).
 
 **End-user Desktop agent** is a separate product:
 [houdry-genomex/houdry-agent](https://github.com/houdry-genomex/houdry-agent)
@@ -36,11 +36,11 @@ irm https://github.com/houdry-genomex/houdry/releases/latest/download/install.ps
 `latest` always points at the newest published tag. Pin a version with:
 
 ```bash
-HOODRY_VERSION=v0.6.0 curl -fsSL \
-  https://github.com/houdry-genomex/houdry/releases/download/v0.6.0/install.sh | sh
+HOODRY_VERSION=v0.6.1 curl -fsSL \
+  https://github.com/houdry-genomex/houdry/releases/download/v0.6.1/install.sh | sh
 ```
 
-(or set `$env:HOODRY_VERSION = "v0.6.0"` before `install.ps1`).
+(or set `$env:HOODRY_VERSION = "v0.6.1"` before `install.ps1`).
 
 ## Release artifacts (must match installers)
 
@@ -69,23 +69,23 @@ The existing mechanism (do not invent another):
 2. Tag and push:
 
 ```bash
-git tag v0.6.0
-git push origin v0.6.0
+git tag v0.6.1
+git push origin v0.6.1
 ```
 
 3. GitHub Actions workflow **Release** (`.github/workflows/release.yml`) runs
-   `make test`, `make dist VERSION=0.6.0`, verifies `node join` / `node list` /
+   `make test`, `make dist VERSION=0.6.1`, verifies `node join` / `node list` /
    `job submit` on the Linux amd64 binary, then attaches all assets to the
    GitHub Release for that tag.
 
 4. Confirm on
-   https://github.com/houdry-genomex/houdry/releases/tag/v0.6.0
+   https://github.com/houdry-genomex/houdry/releases/tag/v0.6.1
    that assets include the six binaries plus both installers.
 
 5. On a clean machine, run the curl/irm installers above and check:
 
 ```bash
-houdry version   # → houdry 0.6.0
+houdry version   # → houdry 0.6.1
 houdry help      # mentions node join / job submit
 ```
 
@@ -93,7 +93,7 @@ houdry help      # mentions node join / job submit
 
 ```bash
 make test
-make dist-check VERSION=0.6.0
+make dist-check VERSION=0.6.1
 ./bin/houdry version
 ```
 

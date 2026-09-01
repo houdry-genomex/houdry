@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"houdry/internal/routerchat"
+	"houdry/internal/routeropenai"
 )
 
 // chatHTML is the chat UI, kept as its own file (webui/chat.html) so design
@@ -23,6 +24,9 @@ var chatHTML []byte
 // runRouteWeb serves the routed chat: every message is analyzed, routed to the
 // best local model, executed, and answered with metrics — no manual mode
 // switches. The transport is thin on purpose: all logic lives in routerchat.
+// The HTML bench used to be `houdry route --web`. Chat, streaming, and CAD
+// now live on houdry serve; this file is kept so the UI can be remounted
+// on the control plane later.
 func runRouteWeb(ctx context.Context, ollamaURL, addr string) error {
 	backend := routerchat.NewLocalOllama(ollamaURL)
 	svc := routerchat.New(backend, backend)
@@ -42,7 +46,7 @@ func runRouteWeb(ctx context.Context, ollamaURL, addr string) error {
 
 	// OpenAI-compatible surface, so Houdry Agent (and any OpenAI SDK) can use
 	// this server directly as a provider base_url.
-	registerOpenAICompat(mux, svc, filesDir)
+	routeropenai.Register(mux, svc, filesDir)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -113,8 +117,8 @@ func runRouteWeb(ctx context.Context, ollamaURL, addr string) error {
 		}
 		// A drawing plus CAD intent routes to the cad3dify tool pipeline
 		// instead of plain vision chat: same stream contract, real artifact out.
-		if len(req.Images) > 0 && cadIntent(req.Prompt) {
-			if err := runCADStream(r.Context(), req, filesDir, send); err != nil {
+		if len(req.Images) > 0 && routeropenai.CadIntent(req.Prompt) {
+			if err := routeropenai.RunCADStream(r.Context(), req, filesDir, send); err != nil {
 				send(routerchat.StreamEvent{Type: "error", Err: err.Error()})
 			}
 			return

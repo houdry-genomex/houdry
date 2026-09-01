@@ -127,8 +127,9 @@ func (o *Ollama) loadedSet(ctx context.Context) map[string]bool {
 	}
 	var parsed struct {
 		Models []struct {
-			Name  string `json:"name"`
-			Model string `json:"model"`
+			Name     string `json:"name"`
+			Model    string `json:"model"`
+			SizeVRAM int64  `json:"size_vram"`
 		} `json:"models"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
@@ -145,6 +146,79 @@ func (o *Ollama) loadedSet(ctx context.Context) map[string]bool {
 		out[normalize(id.Name)] = true
 	}
 	return out
+}
+
+// inferenceOnCPU reports that a model is loaded but not in VRAM. WSL snap
+// Ollama often has CUDA libraries on disk and still runs llama.cpp on CPU;
+// a 16k-token Hermes prompt then spends ~6 minutes in prompt-eval.
+func (o *Ollama) inferenceOnCPU(ctx context.Context) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.BaseURL+"/api/ps", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := o.shortClient().Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return false
+	}
+	var parsed struct {
+		Models []struct {
+			Size     int64 `json:"size"`
+			SizeVRAM int64 `json:"size_vram"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return false
+	}
+	if len(parsed.Models) == 0 {
+		return false
+	}
+	for _, m := range parsed.Models {
+		if m.SizeVRAM > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (o *Ollama) loadedVRAM(ctx context.Context) int64 {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.BaseURL+"/api/ps", nil)
+	if err != nil {
+		return 0
+	}
+	resp, err := o.shortClient().Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return 0
+	}
+	var parsed struct {
+		Models []struct {
+			SizeVRAM int64 `json:"size_vram"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return 0
+	}
+	var vram int64
+	for _, m := range parsed.Models {
+		if m.SizeVRAM > vram {
+			vram = m.SizeVRAM
+		}
+	}
+	return vram
+}
+
+func (o *Ollama) shouldCompact(ctx context.Context, in InferRequest) bool {
+	if o.loadedVRAM(ctx) > 0 {
+		return false
+	}
+	return o.inferenceOnCPU(ctx) || hugeAgentDump(in)
 }
 
 func (o *Ollama) EnsureModel(ctx context.Context, name, tag string) (Model, error) {
@@ -187,6 +261,9 @@ func (o *Ollama) Infer(ctx context.Context, in InferRequest) (InferResult, error
 	ref := in.Ref()
 	if ref == "" {
 		return InferResult{}, fmt.Errorf("model name is required")
+	}
+	if o.shouldCompact(ctx, in) {
+		in = compactSlowInference(in)
 	}
 	if in.UsesChatAPI() {
 		return o.inferChat(ctx, in)

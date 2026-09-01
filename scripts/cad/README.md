@@ -2,7 +2,7 @@
 
 Turns a 2D engineering drawing into a 3D solid model (STEP), fully on-device.
 Wired into the routed chat: attaching an image whose prompt shows CAD intent
-(see `cadIntent` in `internal/cli/route_cad.go`) runs this instead of plain
+(see `CadIntent` in `internal/routeropenai/cad.go`) runs this instead of plain
 vision chat, and streams the pipeline log as chat deltas.
 
 Self-contained — the only dependency is `cadquery`. The approach is inspired by

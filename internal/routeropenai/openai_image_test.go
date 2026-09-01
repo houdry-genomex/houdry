@@ -1,4 +1,4 @@
-package cli
+package routeropenai
 
 import (
 	"encoding/base64"
@@ -19,7 +19,7 @@ func TestImagesFromPromptReadsLocalFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	images := imagesFromPrompt("make a 3d model of " + path + " please")
+	images := ImagesFromPrompt("make a 3d model of " + path + " please")
 	if len(images) != 1 {
 		t.Fatalf("got %d images, want 1", len(images))
 	}
@@ -38,7 +38,7 @@ func TestImagesFromPromptDeduplicates(t *testing.T) {
 	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if n := len(imagesFromPrompt(path + " and again " + path)); n != 1 {
+	if n := len(ImagesFromPrompt(path + " and again " + path)); n != 1 {
 		t.Errorf("got %d images, want 1 after dedup", n)
 	}
 }
@@ -64,8 +64,8 @@ func TestImagesFromPromptSkipsNonImages(t *testing.T) {
 		"what is a .jpg file",
 		"my model.png is nice", // relative, not an absolute path
 	} {
-		if got := imagesFromPrompt(prompt); len(got) != 0 {
-			t.Errorf("imagesFromPrompt(%q) returned %d images, want 0", prompt, len(got))
+		if got := ImagesFromPrompt(prompt); len(got) != 0 {
+			t.Errorf("ImagesFromPrompt(%q) returned %d images, want 0", prompt, len(got))
 		}
 	}
 }
@@ -74,8 +74,8 @@ func TestImagesFromPromptSkipsNonImages(t *testing.T) {
 // user feeds it a photo and reads the meaningless part as a real answer.
 func TestCADNeedsImageMessageSetsExpectations(t *testing.T) {
 	for _, want := range []string{"2D engineering drawing", "Attach the image", "path"} {
-		if !strings.Contains(cadNeedsImageMessage, want) {
-			t.Errorf("message does not mention %q:\n%s", want, cadNeedsImageMessage)
+		if !strings.Contains(CadNeedsImageMessage, want) {
+			t.Errorf("message does not mention %q:\n%s", want, CadNeedsImageMessage)
 		}
 	}
 }

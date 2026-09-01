@@ -123,15 +123,13 @@ echo
 echo "Check the version (should be current release, not Phase-1-only):"
 echo "  houdry version"
 echo
-echo "Detect GPUs on this machine:"
+echo "Detect this GPU, then register it as compute (leave that running):"
 echo "  houdry gpu detect"
-echo
-echo "Join a Houdry fabric as a node agent:"
-echo "  houdry node join --server http://<server-ip>:18080"
+echo "  houdry gpu register"
 echo
 if [ -n "${HOODRY_SERVER:-}" ]; then
-  echo "Join this fabric (HOODRY_SERVER is set):"
-  echo "  houdry node join --server ${HOODRY_SERVER}"
+  echo "This installer set HOODRY_SERVER=${HOODRY_SERVER}"
+  echo "  houdry gpu register --server ${HOODRY_SERVER}"
   echo
 fi
 echo "If 'houdry' is not found, open a new terminal or run:"

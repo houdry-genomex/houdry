@@ -14,6 +14,7 @@ import (
 	"houdry/internal/gpu"
 	"houdry/internal/modelruntime"
 	"houdry/internal/openaicompat"
+	"houdry/internal/routing"
 )
 
 func startFakeInferenceWorker(t *testing.T, baseURL string, nodeID string) context.CancelFunc {
@@ -234,7 +235,7 @@ func TestChatCompletionsUnavailableModel(t *testing.T) {
 }
 
 func TestChatCompletionsNoREADYGPU(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir()})
+	s, err := New(Options{DataDir: t.TempDir(), DisableLocalInference: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +374,7 @@ func TestChatCompletionsAutoWithToolsSelectsCoder(t *testing.T) {
 			"function": map[string]any{
 				"name":        "execute_bash",
 				"description": "Run a command",
-				"parameters":   map[string]any{"type": "object"},
+				"parameters":  map[string]any{"type": "object"},
 			},
 		}},
 	}
@@ -501,5 +502,87 @@ func TestChatCompletionsPreservesToolsAndReturnsToolCalls(t *testing.T) {
 	}
 	if !strings.Contains(msg.ToolCalls[0].Function.Arguments, "fibonacci") {
 		t.Fatalf("arguments=%s", msg.ToolCalls[0].Function.Arguments)
+	}
+}
+
+func TestPickNodeModelSkipsUnfittable7b(t *testing.T) {
+	n := Node{
+		Inventory: gpu.Inventory{
+			NodeID: "n1",
+			GPUs: []gpu.GPU{{
+				ID: "gpu-0", Vendor: gpu.VendorNVIDIA, Name: "RTX 2050", MemoryTotalBytes: 4 << 30,
+			}},
+		},
+		Status: StatusBusy,
+		Resources: ResourceProfile{
+			Static:  StaticResources{GPUs: []StaticGPU{{ID: "gpu-0", MemoryTotalBytes: 4 << 30}}},
+			Dynamic: DynamicResources{GPUs: []DynamicGPU{{ID: "gpu-0", MemoryAvailableBytes: 4 << 30}}},
+		},
+		Models: []modelruntime.Model{
+			{Name: "qwen2.5-coder", Tag: "7b", Runtime: "ollama", SizeBytes: 4683087561},
+			{Name: "qwen2.5-coder", Tag: "1.5b", Runtime: "ollama", SizeBytes: 986062089},
+		},
+	}
+	name, tag := pickNodeModel(n, true, routing.DefaultCatalog())
+	if name != "qwen2.5-coder" || tag != "1.5b" {
+		t.Fatalf("got %s:%s, want qwen2.5-coder:1.5b", name, tag)
+	}
+}
+
+func TestChatCompletionsBusyNodePicksFittingCoderNot7b(t *testing.T) {
+	s, err := New(Options{DataDir: t.TempDir(), Version: "test", OpenAIWait: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+
+	joinChatTestNode(t, ts.URL, "node-1", []modelruntime.Model{
+		{Name: "qwen2.5-coder", Tag: "7b", Runtime: "ollama", State: modelruntime.StateAvailable, SizeBytes: 4683087561},
+		{Name: "qwen2.5-coder", Tag: "1.5b", Runtime: "ollama", State: modelruntime.StateAvailable, SizeBytes: 986062089},
+		{Name: "tinyllama", Tag: "latest", Runtime: "ollama", State: modelruntime.StateAvailable},
+	})
+	s.store.SetStatus("node-1", StatusBusy, "job-other")
+	stop := startFakeInferenceWorker(t, ts.URL, "node-1")
+	defer stop()
+	go func() {
+		time.Sleep(80 * time.Millisecond)
+		s.store.SetStatus("node-1", StatusReady, "")
+		s.tryScheduleQueued()
+	}()
+
+	body := map[string]any{
+		"model": "auto",
+		"messages": []map[string]string{
+			{"role": "user", "content": "what is the capital of france?"},
+		},
+		"tools": []map[string]any{{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "execute_bash",
+				"description": "Run a command",
+				"parameters":  map[string]any{"type": "object"},
+			},
+		}},
+	}
+	raw, _ := json.Marshal(body)
+	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, data)
+	}
+	var found string
+	for _, j := range s.jobs.List() {
+		if ref := j.Requirements.ModelIdentity().Ref(); strings.Contains(ref, "qwen2.5-coder") {
+			found = ref
+		}
+	}
+	if found != "qwen2.5-coder:1.5b" {
+		t.Fatalf("expected 1.5b on busy 4GiB node, got %q", found)
 	}
 }

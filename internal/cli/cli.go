@@ -14,6 +14,7 @@ import (
 
 	"houdry/internal/agent"
 	"houdry/internal/config"
+	"houdry/internal/discovery"
 	"houdry/internal/gpu"
 	"houdry/internal/server"
 	"houdry/internal/version"
@@ -35,6 +36,8 @@ func Run(args []string) error {
 		return runRoute(args[1:])
 	case "job":
 		return runJob(args[1:])
+	case "discover":
+		return runDiscover(args[1:])
 	case "serve":
 		return runServe(args[1:])
 	case "version", "--version", "-v":
@@ -50,39 +53,43 @@ func Run(args []string) error {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintf(w, `Houdry — private GPU fabric
+	fmt.Fprintf(w, `Houdry: private GPU fabric
 
 Usage:
-  houdry gpu detect|join|list …
+  houdry gpu detect
+  houdry gpu register
   houdry node join|list|drain|leave …
   houdry model list [--server URL] [--json]
   houdry route --prompt TEXT [--execute] [--wait] [--runtime NAME]
   houdry job submit gpu.smoke|inference …
   houdry job list|get …
+  houdry discover
   houdry serve …
   houdry version
 
-Common commands:
+GPU host (after install): detect, then register as compute.
+Leave register running. It logs when the control plane sends work
+from Houdry Agent.
 
-  houdry node join --server http://HOST:18080
-  houdry node list --server http://HOST:18080
-  houdry job submit gpu.smoke --server http://HOST:18080 --wait
-  houdry job submit inference --model NAME --prompt TEXT --wait
+  houdry gpu detect
+  houdry gpu register
+  houdry node list
+  houdry job submit gpu.smoke --wait
+  houdry serve --listen 0.0.0.0:8080
 
-Phase 5 routing (analyze → pick model+node → optional execute):
-
-  houdry route --prompt "Say hello" --execute --wait
-  houdry route --prompt "Refactor this Go function…" --execute --wait
+Same WiFi: register finds the control plane. Override with --server.
 `)
 }
 
 func runGPU(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: houdry gpu detect|join|list")
+		return errors.New("usage: houdry gpu detect|register")
 	}
 	switch args[0] {
 	case "detect":
 		return runDetect(args[1:])
+	case "register":
+		return runComputeRegister("gpu register", args[1:])
 	case "join":
 		return runJoin(args[1:])
 	case "list":
@@ -217,8 +224,12 @@ func runNode(args []string) error {
 }
 
 func runNodeJoin(args []string) error {
-	fs := flag.NewFlagSet("node join", flag.ContinueOnError)
-	serverURL := fs.String("server", "", "Houdry server URL")
+	return runComputeRegister("node join", args)
+}
+
+func runComputeRegister(flagName string, args []string) error {
+	fs := flag.NewFlagSet(flagName, flag.ContinueOnError)
+	serverURL := fs.String("server", "", "Houdry control plane URL (optional on the same WiFi)")
 	token := fs.String("token", "", "join token")
 	interval := fs.Duration("interval", 2*time.Second, "heartbeat / claim interval")
 	fs.SetOutput(os.Stderr)
@@ -581,8 +592,8 @@ func runRoute(args []string) error {
 	local := fs.Bool("local", false, "route against this machine's Ollama daemon (no fabric needed)")
 	run := fs.Bool("run", false, "with --local: execute the selected model and print its answer")
 	interactive := fs.Bool("interactive", false, "with --local: REPL test bench — type prompts, see routing decisions")
-	web := fs.Bool("web", false, "serve the router test bench as a local web page")
-	addr := fs.String("addr", "127.0.0.1:8090", "listen address for --web")
+	web := fs.Bool("web", false, "removed: chat, streaming, and CAD now live on houdry serve")
+	_ = fs.String("addr", "127.0.0.1:8090", "removed with --web")
 	ollamaURL := fs.String("ollama", defaultOllamaURL, "Ollama base URL for --local")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(args); err != nil {
@@ -595,11 +606,11 @@ func runRoute(args []string) error {
 
 	// Local mode: single-machine routing straight against Ollama — the test
 	// bench for the router itself. No server, no join config.
-	if *local || *interactive || *web {
+	if *web {
+		return errors.New("houdry route --web was removed; chat, streaming, and CAD now run on the control plane\n  houdry serve --listen 0.0.0.0:8080")
+	}
+	if *local || *interactive {
 		ctx := context.Background()
-		if *web {
-			return runRouteWeb(ctx, *ollamaURL, *addr)
-		}
 		if *interactive {
 			return runRouteInteractive(ctx, *ollamaURL, *run)
 		}
@@ -845,6 +856,7 @@ func runServe(args []string) error {
 	token := fs.String("token", "", "optional join token")
 	noOpenAI := fs.Bool("no-openai-compat", false, "disable OpenAI-compatible /v1/chat/completions")
 	openaiWait := fs.Duration("openai-wait", 10*time.Minute, "max wait for chat completion inference jobs")
+	noDiscover := fs.Bool("no-lan-discover", false, "do not announce this control plane on WiFi/LAN")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -857,10 +869,28 @@ func runServe(args []string) error {
 	}
 	fmt.Printf("Houdry server %s listening on http://%s\n", version.Version, *listen)
 	if !*noOpenAI {
-		fmt.Printf("OpenAI-compatible API: POST http://<host>:%s/v1/chat/completions  (model=auto uses Houdry router)\n", portOf(*listen))
+		fmt.Printf("OpenAI-compatible API: POST http://<host>:%s/v1/chat/completions  (model=auto)\n", portOf(*listen))
+		fmt.Println("  READY GPU node → cluster job; otherwise Ollama on this machine (streaming, vision, CAD)")
 	}
 	fmt.Printf("Install (Linux/macOS): curl -fsSL http://<host>:%s/install.sh | sh\n", portOf(*listen))
 	fmt.Printf("Install (Windows):     irm http://<host>:%s/install.ps1 | iex\n", portOf(*listen))
+	if !*noDiscover {
+		stop, err := discovery.Advertise(discovery.Info{
+			Listen:       *listen,
+			Version:      version.Version,
+			Path:         "/v1",
+			AuthRequired: *token != "",
+			OpenAI:       !*noOpenAI,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "LAN discovery off: %v\n", err)
+		} else {
+			defer stop()
+			fmt.Printf("LAN discovery: on this WiFi as _houdry._tcp and UDP port %d\n", discovery.UDPPort)
+			fmt.Println("GPU hosts: houdry gpu detect && houdry gpu register")
+			fmt.Println("Agent:     finds this host on WiFi; or houdry discover")
+		}
+	}
 	return server.ListenAndServe(*listen, server.Options{
 		DataDir:             *dataDir,
 		BinariesDir:         *binaries,
@@ -871,15 +901,58 @@ func runServe(args []string) error {
 	})
 }
 
+func runDiscover(args []string) error {
+	fs := flag.NewFlagSet("discover", flag.ContinueOnError)
+	wait := fs.Duration("timeout", 3*time.Second, "how long to listen for control planes")
+	asJSON := fs.Bool("json", false, "print machine-readable JSON")
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	found, err := discovery.Browse(context.Background(), *wait)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return encodeJSON(os.Stdout, found)
+	}
+	if len(found) == 0 {
+		fmt.Println("No Houdry control plane found on this WiFi.")
+		fmt.Println("Start one with: houdry serve")
+		fmt.Println("If the SSID isolates clients (guest WiFi), discovery cannot work; pass --server URL instead.")
+		return nil
+	}
+	fmt.Printf("Houdry control planes on this WiFi (%d)\n\n", len(found))
+	for _, ep := range found {
+		ok := discovery.Verify(context.Background(), ep)
+		status := "unreachable"
+		if ok {
+			status = "ok"
+		}
+		fmt.Printf("%s  %s  api=%s  (%s, %s)\n", ep.URL, ep.Name, ep.APIBase(), ep.Source, status)
+	}
+	return nil
+}
+
 func loadJoinConfig(serverURL, token string) (*config.Config, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, err
 	}
+	saved := strings.TrimRight(cfg.Server, "/")
 	if serverURL != "" {
 		cfg.Server = strings.TrimRight(serverURL, "/")
 	} else if v := os.Getenv("HOODRY_SERVER"); v != "" {
 		cfg.Server = strings.TrimRight(v, "/")
+	} else if saved != "" {
+		cfg.Server = saved
+	} else {
+		ep, err := discovery.Resolve(context.Background(), 3*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Server = ep.URL
+		fmt.Printf("Found Houdry on WiFi: %s\n", ep.APIBase())
 	}
 	if token != "" {
 		cfg.Token = token
@@ -887,7 +960,7 @@ func loadJoinConfig(serverURL, token string) (*config.Config, error) {
 		cfg.Token = v
 	}
 	if cfg.Server == "" {
-		return nil, errors.New("no server URL: pass --server, set HOODRY_SERVER, or run the install script from a Houdry server")
+		return nil, errors.New("no server URL: pass --server, set HOODRY_SERVER, or run houdry serve on this WiFi")
 	}
 	if err := cfg.EnsureNodeID(); err != nil {
 		return nil, err

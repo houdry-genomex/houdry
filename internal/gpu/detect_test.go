@@ -127,6 +127,35 @@ func TestMergeDedupesByPCI(t *testing.T) {
 	}
 }
 
+func TestMergeDedupesWMINVIDIAAlreadySeenBySMI(t *testing.T) {
+	in := []GPU{
+		{Vendor: VendorNVIDIA, Name: "NVIDIA GeForce RTX 2050", UUID: "GPU-5d0ce205", PCIBusID: "00000000:01:00.0", MemoryTotalBytes: 4 << 30, Source: "nvidia-smi"},
+		{Vendor: VendorNVIDIA, Name: "NVIDIA GeForce RTX 2050", MemoryTotalBytes: 4 << 30, Source: "wmi"},
+		{Vendor: VendorIntel, Name: "Intel(R) UHD Graphics", MemoryTotalBytes: 2 << 30, Source: "wmi"},
+	}
+	out := mergeGPUs(in)
+	if len(out) != 2 {
+		t.Fatalf("got %d GPUs, want 2 (one NVIDIA, one Intel): %+v", len(out), out)
+	}
+	if out[0].Vendor != VendorNVIDIA || !strings.Contains(out[0].Source, "wmi") {
+		t.Errorf("nvidia row = %+v", out[0])
+	}
+	if out[1].Vendor != VendorIntel {
+		t.Errorf("intel row = %+v", out[1])
+	}
+}
+
+func TestMergeKeepsTwoWMIOnlyIdenticalCards(t *testing.T) {
+	in := []GPU{
+		{Vendor: VendorNVIDIA, Name: "NVIDIA GeForce RTX 4090", Source: "wmi"},
+		{Vendor: VendorNVIDIA, Name: "NVIDIA GeForce RTX 4090", Source: "wmi"},
+	}
+	out := mergeGPUs(in)
+	if len(out) != 2 {
+		t.Fatalf("got %d, want 2 WMI-only copies", len(out))
+	}
+}
+
 func TestDetectNVIDIA(t *testing.T) {
 	r := &fakeRunner{
 		bins: map[string]string{"nvidia-smi": "/usr/bin/nvidia-smi"},

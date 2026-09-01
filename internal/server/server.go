@@ -22,12 +22,13 @@ import (
 )
 
 type Options struct {
-	DataDir             string
-	BinariesDir         string
-	Token               string
-	Version             string
-	DisableOpenAICompat bool          // when true, /v1/chat/completions is not registered
-	OpenAIWait          time.Duration // max wait for chat completion inference
+	DataDir               string
+	BinariesDir           string
+	Token                 string
+	Version               string
+	DisableOpenAICompat   bool          // when true, /v1/chat/completions is not registered
+	DisableLocalInference bool          // tests: never fall back to loopback Ollama
+	OpenAIWait            time.Duration // max wait for chat completion inference
 }
 
 // JoinRequest is the body for join and heartbeat. Phase 1 clients send only
@@ -99,6 +100,10 @@ func (s *Server) Close() {
 	}
 }
 
+func (s *Server) generatedDir() string {
+	return filepath.Join(s.opts.DataDir, "generated")
+}
+
 func (s *Server) sweepOffline() {
 	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
@@ -117,6 +122,7 @@ func (s *Server) sweepOffline() {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
+	s.mux.HandleFunc("GET /.well-known/houdry.json", s.handleWellKnown)
 	s.mux.HandleFunc("GET /", s.handleDashboard)
 	s.mux.HandleFunc("GET /v1/cluster", s.handleCluster)
 	s.mux.HandleFunc("GET /v1/nodes", s.handleListNodes)
@@ -135,6 +141,9 @@ func (s *Server) routes() {
 		s.mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 		s.mux.HandleFunc("GET /v1/models", s.handleOpenAIModels)
 	}
+	filesDir := s.generatedDir()
+	_ = os.MkdirAll(filesDir, 0o755)
+	s.mux.Handle("GET /files/", http.StripPrefix("/files/", http.FileServer(http.Dir(filesDir))))
 	s.mux.HandleFunc("GET /install.sh", s.handleInstallSH)
 	s.mux.HandleFunc("GET /install.ps1", s.handleInstallPS1)
 	s.mux.HandleFunc("GET /download/{os}/{arch}", s.handleDownload)
@@ -142,6 +151,17 @@ func (s *Server) routes() {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": s.opts.Version})
+}
+
+func (s *Server) handleWellKnown(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"houdry":  "control-plane",
+		"v":       1,
+		"version": s.opts.Version,
+		"path":    "/v1",
+		"openai":  !s.opts.DisableOpenAICompat,
+		"auth":    s.opts.Token != "",
+	})
 }
 
 func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
@@ -174,6 +194,7 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	n = s.store.Upsert(n)
+	s.jobs.FailRunningExcept(n.NodeID, req.CurrentJobID, "worker restarted")
 	s.tryScheduleQueued()
 	writeJSON(w, http.StatusOK, n)
 }
@@ -206,6 +227,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "node not registered; call /v1/nodes/join first"})
 		return
 	}
+	s.jobs.FailRunningExcept(out.NodeID, req.CurrentJobID, "worker is no longer running this job")
 	if out.Status == StatusReady {
 		s.tryScheduleQueued()
 	}

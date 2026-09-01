@@ -1,4 +1,4 @@
-package cli
+package routeropenai
 
 import (
 	"bufio"
@@ -29,7 +29,8 @@ var cadIntentTerms = []string{
 	"convert to 3d", "make it 3d", "generate 3d", "solid model", "3dify",
 }
 
-func cadIntent(prompt string) bool {
+// CadIntent reports whether the prompt is asking for a 3D/CAD artifact.
+func CadIntent(prompt string) bool {
 	lower := strings.ToLower(prompt)
 	for _, term := range cadIntentTerms {
 		if strings.Contains(lower, term) {
@@ -105,9 +106,9 @@ func cadPython() (string, error) {
 	return "", fmt.Errorf("no python with cadquery found — see scripts/cad/README.md (or set HOUDRY_CAD_PYTHON)")
 }
 
-// runCADStream executes the drawing→STEP pipeline, streaming cad3dify's own
+// RunCADStream executes the drawing→STEP pipeline, streaming cad3dify's own
 // progress log as chat deltas and finishing with a downloadable artifact.
-func runCADStream(ctx context.Context, req routerchat.AnswerRequest, filesDir string, emit func(routerchat.StreamEvent)) error {
+func RunCADStream(ctx context.Context, req routerchat.AnswerRequest, filesDir string, emit func(routerchat.StreamEvent)) error {
 	started := time.Now()
 	script, err := cadScript()
 	if err != nil {

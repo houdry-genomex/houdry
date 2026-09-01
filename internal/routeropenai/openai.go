@@ -1,4 +1,4 @@
-package cli
+package routeropenai
 
 import (
 	"context"
@@ -16,42 +16,15 @@ import (
 	"houdry/internal/routerchat"
 )
 
-// OpenAI-compatible surface for the routed chat server.
-//
-// `houdry serve` also exposes /v1, but that path dispatches cluster jobs
-// against the seeded catalog and fakes streaming (it buffers the whole answer
-// and emits it as one chunk). This adapter instead sits directly on
-// routerchat, so clients pointed at this port get the live Ollama inventory,
-// real token-by-token streaming, vision input, and the drawing->STEP pipeline
-// through the same OpenAI shape any SDK already speaks.
+// OpenAI-compatible surface backed by routerchat (live Ollama inventory, real
+// token-by-token streaming, vision, and the drawing→STEP pipeline). houdry
+// serve uses this when no READY GPU node is registered; the CLI test bench
+// mounts the same handlers.
 
-// registerOpenAICompat mounts the /v1 endpoints onto the routed chat server.
-func registerOpenAICompat(mux *http.ServeMux, svc *routerchat.Service, filesDir string) {
+// Register mounts /v1/models and /v1/chat/completions onto mux.
+func Register(mux *http.ServeMux, svc *routerchat.Service, filesDir string) {
 	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
-		catalog, _, err := svc.Snapshot(r.Context())
-		if err != nil {
-			openaicompat.WriteError(w, http.StatusServiceUnavailable, "server_error", "upstream_unavailable", err.Error())
-			return
-		}
-		// "auto" first: it is the model clients should pin, since picking a
-		// specific one bypasses the router.
-		data := []map[string]any{{
-			"id": "auto", "object": openaicompat.ObjectModel,
-			"created": 0, "owned_by": "houdry",
-		}}
-		for _, e := range catalog {
-			id := e.Name
-			if e.Tag != "" {
-				id = e.Name + ":" + e.Tag
-			}
-			data = append(data, map[string]any{
-				"id": id, "object": openaicompat.ObjectModel,
-				"created": 0, "owned_by": "houdry",
-			})
-		}
-		openaicompat.WriteJSON(w, http.StatusOK, map[string]any{
-			"object": openaicompat.ObjectList, "data": data,
-		})
+		WriteModels(w, r, svc)
 	})
 
 	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
@@ -68,87 +41,120 @@ func registerOpenAICompat(mux *http.ServeMux, svc *routerchat.Service, filesDir 
 			openaicompat.WriteError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error())
 			return
 		}
-
-		answerReq := routerchat.AnswerRequest{
-			Prompt:  openaicompat.LastUserText(req.Messages),
-			History: historyFromMessages(req.Messages),
-			Images:  imagesFromMessages(req.Messages),
-		}
-		if req.MaxTokens != nil && *req.MaxTokens > 0 {
-			answerReq.MaxTokens = *req.MaxTokens
-		}
-		if strings.TrimSpace(answerReq.Prompt) == "" {
-			openaicompat.WriteError(w, http.StatusBadRequest, "invalid_request_error", "empty_prompt", "no user message content")
-			return
-		}
-
-		// A path typed in the message counts as an attachment; see
-		// imagesFromPrompt for why this is load-bearing for CAD.
-		if len(answerReq.Images) == 0 {
-			answerReq.Images = imagesFromPrompt(answerReq.Prompt)
-		}
-
-		id := "chatcmpl-" + randomID()
-		wantsCAD := cadIntent(answerReq.Prompt)
-		isCAD := len(answerReq.Images) > 0 && wantsCAD
-
-		// Asked for a 3D model with no usable image. Answer directly instead of
-		// handing the turn to a chat model: it cannot see, cannot run the
-		// pipeline, and small models respond to that gap by inventing tools and
-		// fabricating a result, which reads as success to the user.
-		if wantsCAD && len(answerReq.Images) == 0 {
-			writeCADNeedsImage(w, req.Stream, id)
-			return
-		}
-
-		if req.Stream {
-			streamOpenAI(r.Context(), w, svc, answerReq, id, isCAD, filesDir, absoluteFileBase(r))
-			return
-		}
-
-		// Non-streaming: collect the answer, then shape it as a completion.
-		var (
-			text  strings.Builder
-			model = "auto"
-			file  *routerchat.Artifact
-		)
-		emit := func(ev routerchat.StreamEvent) {
-			switch ev.Type {
-			case "delta":
-				text.WriteString(ev.Delta)
-			case "retry":
-				text.Reset() // a failover invalidates everything streamed so far
-			case "done":
-				if ev.Response != nil {
-					model = ev.Response.Model
-					file = ev.Response.File
-					if ev.Response.Answer != "" {
-						text.Reset()
-						text.WriteString(ev.Response.Answer)
-					}
-				}
-			}
-		}
-		var err error
-		if isCAD {
-			err = runCADStream(r.Context(), answerReq, filesDir, emit)
-		} else {
-			err = svc.AnswerStream(r.Context(), answerReq, emit)
-		}
-		if err != nil {
-			openaicompat.WriteError(w, http.StatusBadGateway, "server_error", "inference_failed", err.Error())
-			return
-		}
-		content := text.String()
-		if file != nil {
-			content += artifactNote(file, absoluteFileBase(r))
-		}
-		openaicompat.WriteJSON(w, http.StatusOK,
-			openaicompat.BuildCompletion(id, model, content, 0, 0))
+		ServeChat(w, r, svc, filesDir, req)
 	})
 }
 
-const cadNeedsImageMessage = "I can build a real 3D model, but I need the drawing itself — " +
+// WriteModels lists "auto" plus whatever routerchat currently sees.
+func WriteModels(w http.ResponseWriter, r *http.Request, svc *routerchat.Service) {
+	catalog, _, err := svc.Snapshot(r.Context())
+	if err != nil {
+		openaicompat.WriteError(w, http.StatusServiceUnavailable, "server_error", "upstream_unavailable", err.Error())
+		return
+	}
+	// "auto" first: it is the model clients should pin, since picking a
+	// specific one bypasses the router.
+	data := []map[string]any{{
+		"id": "auto", "object": openaicompat.ObjectModel,
+		"created": 0, "owned_by": "houdry",
+	}}
+	for _, e := range catalog {
+		id := e.Name
+		if e.Tag != "" {
+			id = e.Name + ":" + e.Tag
+		}
+		data = append(data, map[string]any{
+			"id": id, "object": openaicompat.ObjectModel,
+			"created": 0, "owned_by": "houdry",
+		})
+	}
+	openaicompat.WriteJSON(w, http.StatusOK, map[string]any{
+		"object": openaicompat.ObjectList, "data": data,
+	})
+}
+
+// ServeChat handles an already-validated OpenAI chat request through routerchat.
+func ServeChat(w http.ResponseWriter, r *http.Request, svc *routerchat.Service, filesDir string, req openaicompat.ChatCompletionRequest) {
+	answerReq := routerchat.AnswerRequest{
+		Prompt:  openaicompat.LastUserText(req.Messages),
+		History: historyFromMessages(req.Messages),
+		Images:  imagesFromMessages(req.Messages),
+	}
+	if req.MaxTokens != nil && *req.MaxTokens > 0 {
+		answerReq.MaxTokens = *req.MaxTokens
+	}
+	if strings.TrimSpace(answerReq.Prompt) == "" {
+		openaicompat.WriteError(w, http.StatusBadRequest, "invalid_request_error", "empty_prompt", "no user message content")
+		return
+	}
+
+	// A path typed in the message counts as an attachment; see
+	// ImagesFromPrompt for why this is load-bearing for CAD.
+	if len(answerReq.Images) == 0 {
+		answerReq.Images = ImagesFromPrompt(answerReq.Prompt)
+	}
+
+	id := "chatcmpl-" + randomID()
+	wantsCAD := CadIntent(answerReq.Prompt)
+	isCAD := len(answerReq.Images) > 0 && wantsCAD
+
+	// Asked for a 3D model with no usable image. Answer directly instead of
+	// handing the turn to a chat model: it cannot see, cannot run the
+	// pipeline, and small models respond to that gap by inventing tools and
+	// fabricating a result, which reads as success to the user.
+	if wantsCAD && len(answerReq.Images) == 0 {
+		writeCADNeedsImage(w, req.Stream, id)
+		return
+	}
+
+	if req.Stream {
+		streamOpenAI(r.Context(), w, svc, answerReq, id, isCAD, filesDir, absoluteFileBase(r))
+		return
+	}
+
+	// Non-streaming: collect the answer, then shape it as a completion.
+	var (
+		text  strings.Builder
+		model = "auto"
+		file  *routerchat.Artifact
+	)
+	emit := func(ev routerchat.StreamEvent) {
+		switch ev.Type {
+		case "delta":
+			text.WriteString(ev.Delta)
+		case "retry":
+			text.Reset() // a failover invalidates everything streamed so far
+		case "done":
+			if ev.Response != nil {
+				model = ev.Response.Model
+				file = ev.Response.File
+				if ev.Response.Answer != "" {
+					text.Reset()
+					text.WriteString(ev.Response.Answer)
+				}
+			}
+		}
+	}
+	var err error
+	if isCAD {
+		err = RunCADStream(r.Context(), answerReq, filesDir, emit)
+	} else {
+		err = svc.AnswerStream(r.Context(), answerReq, emit)
+	}
+	if err != nil {
+		openaicompat.WriteError(w, http.StatusBadGateway, "server_error", "inference_failed", err.Error())
+		return
+	}
+	content := text.String()
+	if file != nil {
+		content += artifactNote(file, absoluteFileBase(r))
+	}
+	openaicompat.WriteJSON(w, http.StatusOK,
+		openaicompat.BuildCompletion(id, model, content, 0, 0))
+}
+
+// CadNeedsImageMessage is the refusal when CAD intent arrives without a drawing.
+const CadNeedsImageMessage = "I can build a real 3D model, but I need the drawing itself — " +
 	"I can't see one in this message.\n\n" +
 	"Attach the image, or paste its full path (for example " +
 	"`C:\\Users\\you\\Desktop\\part.jpg`) and I'll run it through the CAD " +
@@ -164,13 +170,13 @@ const cadNeedsImageMessage = "I can build a real 3D model, but I need the drawin
 func writeCADNeedsImage(w http.ResponseWriter, stream bool, id string) {
 	if !stream {
 		openaicompat.WriteJSON(w, http.StatusOK,
-			openaicompat.BuildCompletion(id, "houdry-cad", cadNeedsImageMessage, 0, 0))
+			openaicompat.BuildCompletion(id, "houdry-cad", CadNeedsImageMessage, 0, 0))
 		return
 	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		openaicompat.WriteJSON(w, http.StatusOK,
-			openaicompat.BuildCompletion(id, "houdry-cad", cadNeedsImageMessage, 0, 0))
+			openaicompat.BuildCompletion(id, "houdry-cad", CadNeedsImageMessage, 0, 0))
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -190,7 +196,7 @@ func writeCADNeedsImage(w http.ResponseWriter, stream bool, id string) {
 		fmt.Fprintf(w, "data: %s\n\n", payload)
 		flusher.Flush()
 	}
-	send(map[string]any{"role": "assistant", "content": cadNeedsImageMessage}, nil)
+	send(map[string]any{"role": "assistant", "content": CadNeedsImageMessage}, nil)
 	send(map[string]any{}, "stop")
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
@@ -267,7 +273,7 @@ func streamOpenAI(ctx context.Context, w http.ResponseWriter, svc *routerchat.Se
 
 	var err error
 	if isCAD {
-		err = runCADStream(ctx, req, filesDir, emit)
+		err = RunCADStream(ctx, req, filesDir, emit)
 	} else {
 		err = svc.AnswerStream(ctx, req, emit)
 	}
@@ -377,7 +383,7 @@ var localImagePathRE = regexp.MustCompile(
 // being slurped into memory.
 const maxLocalImageBytes = 64 << 20
 
-// imagesFromPrompt loads images the user referred to by path in their message.
+// ImagesFromPrompt loads images the user referred to by path in their message.
 //
 // People paste "make a 3D model of C:\...\part.jpg" rather than attaching a
 // file, and without this the request has no images at all: CAD intent detection
@@ -385,7 +391,7 @@ const maxLocalImageBytes = 64 << 20
 // invent a result instead of admitting it cannot see the file. Reading from
 // the local disk keeps the on-premise guarantee intact — unlike the http(s)
 // case in decodeImagePayload, nothing leaves the machine.
-func imagesFromPrompt(prompt string) []string {
+func ImagesFromPrompt(prompt string) []string {
 	var images []string
 	seen := map[string]bool{}
 	for _, match := range localImagePathRE.FindAllString(prompt, -1) {

@@ -152,7 +152,7 @@ path does not provide live utilization, temperature, or driver version.
 
 ### Public GitHub release (friends / any machine)
 
-Current release line: **[v0.6.0](https://github.com/houdry-genomex/houdry/releases/tag/v0.6.0)**
+Current release line: **[v0.6.1](https://github.com/houdry-genomex/houdry/releases/tag/v0.6.1)**
 (full CLI: node agent, jobs, routing, OpenAI-compatible API). See
 [Release.md](Release.md) for publish steps and asset names.
 

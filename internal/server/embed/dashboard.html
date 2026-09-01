@@ -65,7 +65,7 @@
       Queued jobs: {{.Summary.QueuedJobs}}
     </div>
     <div class="install">
-      Agent: <code>houdry node join --server {{.Server}}</code><br>
+      Compute: <code>houdry gpu detect</code> then <code>houdry gpu register</code><br>
       Cluster: <code>houdry node list --server {{.Server}}</code><br>
       Job: <code>houdry route --prompt "Hello" --execute --wait --server {{.Server}}</code>
     </div>
@@ -73,7 +73,7 @@
   <main>
     <h2>Nodes</h2>
     {{if not .Nodes}}
-      <p class="empty">No nodes yet. Start an agent with <code>houdry node join --server {{.Server}}</code>.</p>
+      <p class="empty">No compute yet. On a GPU machine: <code>houdry gpu detect</code> then <code>houdry gpu register</code>.</p>
     {{else}}
       <section class="node">
         <table>

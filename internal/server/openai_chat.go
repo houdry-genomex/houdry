@@ -7,10 +7,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"houdry/internal/modelruntime"
 	"houdry/internal/openaicompat"
+	"houdry/internal/routerchat"
+	"houdry/internal/routeropenai"
 	"houdry/internal/routing"
 )
 
@@ -19,7 +23,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer r.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
 	if err != nil {
 		openaicompat.WriteError(w, http.StatusBadRequest, "invalid_request_error", "bad_request", "failed to read body")
 		return
@@ -31,6 +35,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := openaicompat.ValidateChatRequest(req); err != nil {
 		openaicompat.WriteError(w, http.StatusBadRequest, "invalid_request_error", "invalid_messages", err.Error())
+		return
+	}
+
+	// Local Ollama only when there is no GPU worker at all. A BUSY node used
+	// to look like "no READY GPU" and leaked the next Agent turn into
+	// routerchat (7b OOM, tinyllama retry) while the worker was still busy.
+	if !s.hasGPUWorker() && s.handleLocalChat(w, r, req) {
 		return
 	}
 
@@ -47,34 +58,55 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if openaicompat.IsAutoModel(req.Model) {
-		decision := s.routePromptOpts(routeSignal, "", false, len(req.Tools) > 0)
+		decision := s.routePromptOpts(routeSignal, "", false, len(req.Tools) > 0, true)
 		if decision.Deferred {
 			openaicompat.WriteError(w, http.StatusBadRequest, "invalid_request_error", "unsupported_modality",
 				"request modality is not supported by the current Houdry pipeline")
 			return
 		}
 		if decision.Selected == nil {
-			msg := "no suitable model or GPU node is currently available"
-			if len(req.Tools) > 0 {
-				msg = "no tool-capable model is available on a READY node (e.g. install qwen2.5-coder)"
+			n, ok := s.firstGPUWorker()
+			name, tag := "", ""
+			catalog, err := s.loadCatalog()
+			if err != nil {
+				catalog = routing.DefaultCatalog()
 			}
-			openaicompat.WriteError(w, http.StatusServiceUnavailable, "server_error", "no_suitable_node", msg)
-			return
-		}
-		sel := decision.Selected
-		modelName = sel.Entry.Name
-		modelTag = sel.Entry.Tag
-		runtime = sel.Entry.Runtime
-		nodeID = sel.NodeID
-		minVRAM = sel.Entry.MinVRAMBytes
-		routeMeta = map[string]any{
-			"mode":       "auto",
-			"modality":   decision.Profile.Modality,
-			"complexity": decision.Profile.Complexity,
-			"score":      sel.Score,
-			"reasons":    sel.Reasons,
-			"catalog":    sel.Entry.Ref(),
-			"tools":      len(req.Tools) > 0,
+			if ok {
+				name, tag = pickNodeModel(n, len(req.Tools) > 0, catalog)
+			}
+			if name == "" {
+				msg := "no suitable model or GPU node is currently available"
+				if len(req.Tools) > 0 {
+					msg = "no tool-capable model is available that fits this GPU (e.g. install qwen2.5-coder:1.5b)"
+				}
+				openaicompat.WriteError(w, http.StatusServiceUnavailable, "server_error", "no_suitable_node", msg)
+				return
+			}
+			modelName, modelTag = name, tag
+			nodeID = n.NodeID
+			minVRAM = catalogMinVRAM(catalog, n, name, tag)
+			routeMeta = map[string]any{
+				"mode":    "auto",
+				"queued":  true,
+				"catalog": modelruntime.ParseRef(name + ":" + tag).Ref(),
+				"tools":   len(req.Tools) > 0,
+			}
+		} else {
+			sel := decision.Selected
+			modelName = sel.Entry.Name
+			modelTag = sel.Entry.Tag
+			runtime = sel.Entry.Runtime
+			nodeID = sel.NodeID
+			minVRAM = sel.Entry.MinVRAMBytes
+			routeMeta = map[string]any{
+				"mode":       "auto",
+				"modality":   decision.Profile.Modality,
+				"complexity": decision.Profile.Complexity,
+				"score":      sel.Score,
+				"reasons":    sel.Reasons,
+				"catalog":    sel.Entry.Ref(),
+				"tools":      len(req.Tools) > 0,
+			}
 		}
 	} else {
 		id := modelruntime.ParseRef(req.Model)
@@ -138,11 +170,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			payload["tool_choice"] = tc
 		}
 	}
-	if req.MaxTokens != nil && *req.MaxTokens > 0 {
+	if req.MaxTokens != nil && *req.MaxTokens > 0 && *req.MaxTokens <= 1024 {
 		payload["max_tokens"] = *req.MaxTokens
-	} else if len(req.Tools) > 0 {
+	} else if req.MaxTokens == nil && len(req.Tools) > 0 {
 		// Tool-using agents need more headroom than short greeting replies.
-		payload["max_tokens"] = 512
+		payload["max_tokens"] = 256
 	}
 	if req.Temperature != nil {
 		payload["temperature"] = *req.Temperature
@@ -240,11 +272,27 @@ func (s *Server) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 			ID: "auto", Object: openaicompat.ObjectModel, Created: created, OwnedBy: "houdry",
 		}},
 	}
+	seen := map[string]bool{"auto": true}
+	if !s.anyREADYNode() {
+		if catalog := s.localCatalog(r.Context()); len(catalog) > 0 {
+			for _, e := range catalog {
+				id := e.Ref()
+				if seen[id] {
+					continue
+				}
+				seen[id] = true
+				list.Data = append(list.Data, openaicompat.ModelCard{
+					ID: id, Object: openaicompat.ObjectModel, Created: created, OwnedBy: "houdry",
+				})
+			}
+			openaicompat.WriteJSON(w, http.StatusOK, list)
+			return
+		}
+	}
 	catalog, err := s.loadCatalog()
 	if err != nil {
 		catalog = routing.DefaultCatalog()
 	}
-	seen := map[string]bool{"auto": true}
 	for _, e := range catalog {
 		id := e.Ref()
 		if seen[id] {
@@ -265,6 +313,88 @@ func (s *Server) anyREADYNode() bool {
 		}
 	}
 	return false
+}
+
+func (s *Server) hasGPUWorker() bool {
+	_, ok := s.firstGPUWorker()
+	return ok
+}
+
+func (s *Server) firstGPUWorker() (Node, bool) {
+	for _, n := range s.store.List() {
+		if n.AgentVersion == "" {
+			continue
+		}
+		switch n.Status {
+		case StatusReady, StatusBusy, StatusDraining:
+			return n, true
+		}
+	}
+	return Node{}, false
+}
+
+func pickNodeModel(n Node, tools bool, catalog []routing.CatalogEntry) (name, tag string) {
+	views := nodesToViews([]Node{n})
+	if len(views) == 0 {
+		return "", ""
+	}
+	return routing.PickFittingModel(views[0], tools, catalog)
+}
+
+func catalogMinVRAM(catalog []routing.CatalogEntry, n Node, name, tag string) uint64 {
+	for _, e := range catalog {
+		if strings.EqualFold(e.Name, name) && strings.EqualFold(e.Tag, tag) {
+			return e.MinVRAMBytes
+		}
+	}
+	for _, m := range n.Models {
+		if strings.EqualFold(m.Name, name) && strings.EqualFold(m.Tag, tag) {
+			return m.SizeBytes
+		}
+	}
+	return 0
+}
+
+func localOllamaURL() string {
+	if u := strings.TrimSpace(os.Getenv("HOUDRY_OLLAMA")); u != "" {
+		return u
+	}
+	return "http://127.0.0.1:11434"
+}
+
+// handleLocalChat serves /v1 chat through loopback Ollama. Returns false when
+// the daemon is not reachable so the caller can fall through to the job-path
+// 503.
+func (s *Server) handleLocalChat(w http.ResponseWriter, r *http.Request, req openaicompat.ChatCompletionRequest) bool {
+	if s.opts.DisableLocalInference {
+		return false
+	}
+	lo := routerchat.NewLocalOllama(localOllamaURL())
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	if _, _, err := lo.Nodes(ctx); err != nil {
+		return false
+	}
+	filesDir := s.generatedDir()
+	if err := os.MkdirAll(filesDir, 0o755); err != nil {
+		return false
+	}
+	routeropenai.ServeChat(w, r, routerchat.New(lo, lo), filesDir, req)
+	return true
+}
+
+func (s *Server) localCatalog(ctx context.Context) []routing.CatalogEntry {
+	if s.opts.DisableLocalInference {
+		return nil
+	}
+	lo := routerchat.NewLocalOllama(localOllamaURL())
+	probe, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_, catalog, err := lo.Nodes(probe)
+	if err != nil {
+		return nil
+	}
+	return catalog
 }
 
 func chatCompletionID() string {

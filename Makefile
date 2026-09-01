@@ -5,7 +5,7 @@ ifeq ($(wildcard $(GO)),)
 GO := go
 endif
 
-VERSION ?= 0.6.0
+VERSION ?= 0.6.1
 LDFLAGS := -s -w -X houdry/internal/version.Version=$(VERSION)
 export CGO_ENABLED := 0
 
@@ -31,6 +31,7 @@ dist: build
 # Quick local check that a dist binary is the expected release CLI.
 dist-check: dist
 	./dist/houdry-linux-$$($(GO) env GOARCH) version | grep -F "houdry $(VERSION)"
+	./dist/houdry-linux-$$($(GO) env GOARCH) help | grep -F "houdry gpu register"
 	./dist/houdry-linux-$$($(GO) env GOARCH) help | grep -F "houdry node join"
 	./dist/houdry-linux-$$($(GO) env GOARCH) help | grep -F "houdry node list"
 	./dist/houdry-linux-$$($(GO) env GOARCH) help | grep -F "houdry job submit"

@@ -69,6 +69,7 @@ func mergeGPUs(in []GPU) []GPU {
 	out := make([]GPU, 0, len(in))
 	byUUID := map[string]int{}
 	byPCI := map[string]int{}
+	byVendorName := map[string]int{}
 	indexOf := func(g GPU) int {
 		if g.UUID != "" {
 			if i, ok := byUUID[strings.ToLower(g.UUID)]; ok {
@@ -77,6 +78,15 @@ func mergeGPUs(in []GPU) []GPU {
 		}
 		if g.PCIBusID != "" {
 			if i, ok := byPCI[normalizePCI(g.PCIBusID)]; ok {
+				return i
+			}
+		}
+		// WMI/lspci often omit UUID and PCI. Fold those onto a richer record
+		// (nvidia-smi) of the same vendor+name so one physical card is not
+		// counted twice. Do not key two UUID-less copies together: two identical
+		// cards reported only by WMI must stay two rows.
+		if g.UUID == "" && g.PCIBusID == "" {
+			if i, ok := byVendorName[vendorNameKey(g)]; ok {
 				return i
 			}
 		}
@@ -89,6 +99,11 @@ func mergeGPUs(in []GPU) []GPU {
 		if g.PCIBusID != "" {
 			byPCI[normalizePCI(g.PCIBusID)] = i
 		}
+		if g.UUID != "" || g.PCIBusID != "" {
+			if k := vendorNameKey(g); k != "" {
+				byVendorName[k] = i
+			}
+		}
 	}
 	for _, g := range in {
 		if i := indexOf(g); i >= 0 {
@@ -100,6 +115,22 @@ func mergeGPUs(in []GPU) []GPU {
 		out = append(out, g)
 	}
 	return out
+}
+
+func vendorNameKey(g GPU) string {
+	name := normalizeGPUName(g.Name)
+	if g.Vendor == "" || name == "" || looksGeneric(g.Name) {
+		return ""
+	}
+	return string(g.Vendor) + "|" + name
+}
+
+func normalizeGPUName(name string) string {
+	n := strings.ToLower(name)
+	n = strings.ReplaceAll(n, "(r)", "")
+	n = strings.ReplaceAll(n, "(tm)", "")
+	n = strings.Join(strings.Fields(n), " ")
+	return n
 }
 
 func normalizePCI(id string) string {
