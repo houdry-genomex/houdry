@@ -58,7 +58,22 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if openaicompat.IsAutoModel(req.Model) {
-		decision := s.routePromptOpts(routeSignal, "", false, len(req.Tools) > 0, true)
+		// Require a model already on the GPU. AllowPull during a live Agent
+		// turn leaves the HTTP request silent while Ollama downloads 1.5b,
+		// which the client reports as "Request timed out."
+		wantTools := len(req.Tools) > 0
+		decision := s.routePromptOpts(routeSignal, "", true, wantTools, true)
+		if wantTools && decision.Selected == nil {
+			// Hermes always attaches 30+ tools, even for "hi". If nothing
+			// tool-capable is installed and fitting, drop tools and answer
+			// with the small chat model that is actually present.
+			decision = s.routePromptOpts(routeSignal, "", true, false, true)
+			if decision.Selected != nil {
+				req.Tools = nil
+				req.ToolChoice = nil
+				wantTools = false
+			}
+		}
 		if decision.Deferred {
 			openaicompat.WriteError(w, http.StatusBadRequest, "invalid_request_error", "unsupported_modality",
 				"request modality is not supported by the current Houdry pipeline")
@@ -72,11 +87,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 				catalog = routing.DefaultCatalog()
 			}
 			if ok {
-				name, tag = pickNodeModel(n, len(req.Tools) > 0, catalog)
+				name, tag = pickNodeModel(n, wantTools, catalog)
 			}
 			if name == "" {
 				msg := "no suitable model or GPU node is currently available"
-				if len(req.Tools) > 0 {
+				if wantTools {
 					msg = "no tool-capable model is available that fits this GPU (e.g. install qwen2.5-coder:1.5b)"
 				}
 				openaicompat.WriteError(w, http.StatusServiceUnavailable, "server_error", "no_suitable_node", msg)
@@ -89,7 +104,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 				"mode":    "auto",
 				"queued":  true,
 				"catalog": modelruntime.ParseRef(name + ":" + tag).Ref(),
-				"tools":   len(req.Tools) > 0,
+				"tools":   wantTools,
 			}
 		} else {
 			sel := decision.Selected
@@ -105,7 +120,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 				"score":      sel.Score,
 				"reasons":    sel.Reasons,
 				"catalog":    sel.Entry.Ref(),
-				"tools":      len(req.Tools) > 0,
+				"tools":      wantTools,
 			}
 		}
 	} else {
@@ -273,36 +288,39 @@ func (s *Server) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 		}},
 	}
 	seen := map[string]bool{"auto": true}
-	if !s.anyREADYNode() {
-		if catalog := s.localCatalog(r.Context()); len(catalog) > 0 {
-			for _, e := range catalog {
-				id := e.Ref()
-				if seen[id] {
-					continue
-				}
-				seen[id] = true
-				list.Data = append(list.Data, openaicompat.ModelCard{
-					ID: id, Object: openaicompat.ObjectModel, Created: created, OwnedBy: "houdry",
-				})
-			}
-			openaicompat.WriteJSON(w, http.StatusOK, list)
+
+	add := func(id string) {
+		if id == "" || seen[id] {
 			return
-		}
-	}
-	catalog, err := s.loadCatalog()
-	if err != nil {
-		catalog = routing.DefaultCatalog()
-	}
-	for _, e := range catalog {
-		id := e.Ref()
-		if seen[id] {
-			continue
 		}
 		seen[id] = true
 		list.Data = append(list.Data, openaicompat.ModelCard{
 			ID: id, Object: openaicompat.ObjectModel, Created: created, OwnedBy: "houdry",
 		})
 	}
+
+	// Inventory actually on GPU workers — not the theoretical default catalog,
+	// which advertised 7b models that are not installed (or do not fit).
+	for _, n := range s.store.List() {
+		if n.AgentVersion == "" {
+			continue
+		}
+		switch n.Status {
+		case StatusReady, StatusBusy, StatusDraining:
+		default:
+			continue
+		}
+		for _, m := range n.Models {
+			add(m.Ref())
+		}
+	}
+
+	if !s.hasGPUWorker() {
+		for _, e := range s.localCatalog(r.Context()) {
+			add(e.Ref())
+		}
+	}
+
 	openaicompat.WriteJSON(w, http.StatusOK, list)
 }
 

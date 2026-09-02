@@ -275,7 +275,7 @@ func TestChatCompletionsDisabled(t *testing.T) {
 }
 
 func TestExistingAPIsUnaffected(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir()})
+	s, err := New(Options{DataDir: t.TempDir(), DisableLocalInference: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,6 +306,56 @@ func TestExistingAPIsUnaffected(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatal(resp.Status)
+	}
+	var models openaicompat.ModelsList
+	if err := json.NewDecoder(resp.Body).Decode(&models); err != nil {
+		t.Fatal(err)
+	}
+	if len(models.Data) != 1 || models.Data[0].ID != "auto" {
+		t.Fatalf("control plane must advertise only auto, got %+v", models.Data)
+	}
+}
+
+func TestOpenAIModelsListsInstalledOnWorkers(t *testing.T) {
+	s, err := New(Options{DataDir: t.TempDir(), DisableLocalInference: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+
+	joinChatTestNode(t, ts.URL, "node-1", []modelruntime.Model{
+		{Name: "tinyllama", Tag: "latest", Runtime: "ollama", State: modelruntime.StateAvailable},
+		{Name: "qwen2.5-coder", Tag: "1.5b", Runtime: "ollama", State: modelruntime.StateAvailable},
+	})
+
+	resp, err := http.Get(ts.URL + "/v1/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatal(resp.Status)
+	}
+	var models openaicompat.ModelsList
+	if err := json.NewDecoder(resp.Body).Decode(&models); err != nil {
+		t.Fatal(err)
+	}
+	if len(models.Data) < 1 || models.Data[0].ID != "auto" {
+		t.Fatalf("auto must be first, got %+v", models.Data)
+	}
+	got := map[string]bool{}
+	for _, m := range models.Data {
+		got[m.ID] = true
+	}
+	for _, id := range []string{"auto", "tinyllama:latest", "qwen2.5-coder:1.5b"} {
+		if !got[id] {
+			t.Fatalf("missing %s in %+v", id, models.Data)
+		}
+	}
+	if got["qwen2.5-coder:7b"] {
+		t.Fatal("must not advertise catalog models that are not installed")
 	}
 }
 
@@ -392,6 +442,53 @@ func TestChatCompletionsAutoWithToolsSelectsCoder(t *testing.T) {
 	_ = json.Unmarshal(data, &out)
 	if !strings.Contains(out.Model, "qwen2.5-coder") {
 		t.Fatalf("expected tool-capable coder for auto+tools, got %q", out.Model)
+	}
+}
+
+func TestChatCompletionsAutoToolsFallsBackWhenCoderMissing(t *testing.T) {
+	s, err := New(Options{DataDir: t.TempDir(), Version: "test", OpenAIWait: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+
+	joinChatTestNode(t, ts.URL, "node-1", []modelruntime.Model{
+		{Name: "tinyllama", Tag: "latest", Runtime: "ollama", State: modelruntime.StateAvailable},
+	})
+	stop := startFakeInferenceWorker(t, ts.URL, "node-1")
+	defer stop()
+
+	body := map[string]any{
+		"model": "auto",
+		"messages": []map[string]string{
+			{"role": "user", "content": "hi"},
+		},
+		"tools": []map[string]any{{
+			"type": "function",
+			"function": map[string]any{
+				"name":       "execute_bash",
+				"parameters": map[string]any{"type": "object"},
+			},
+		}},
+	}
+	raw, _ := json.Marshal(body)
+	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, data)
+	}
+	var out openaicompat.ChatCompletionResponse
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.Model, "tinyllama") {
+		t.Fatalf("expected tinyllama fallback when no coder is installed, got %q", out.Model)
 	}
 }
 

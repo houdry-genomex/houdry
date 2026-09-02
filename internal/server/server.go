@@ -227,6 +227,8 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "node not registered; call /v1/nodes/join first"})
 		return
 	}
+	// Idle heartbeats (empty CurrentJobID) must not fail pending jobs —
+	// those are assigned and waiting for the next claim tick.
 	s.jobs.FailRunningExcept(out.NodeID, req.CurrentJobID, "worker is no longer running this job")
 	if out.Status == StatusReady {
 		s.tryScheduleQueued()

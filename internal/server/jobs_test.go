@@ -42,3 +42,47 @@ func TestFailRunningExceptKeepsCurrentJob(t *testing.T) {
 		t.Fatalf("orphan status=%s", got.Status)
 	}
 }
+
+func TestFailRunningExceptLeavesPending(t *testing.T) {
+	js, err := NewJobStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := js.Create(JobTypeInference, "n1", Requirements{GPURequired: true, ModelName: "tinyllama"}, map[string]any{"prompt": "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !js.Assign(job.ID, "n1") {
+		t.Fatal("assign")
+	}
+	n := js.FailRunningExcept("n1", "", "worker is no longer running this job")
+	if n != 0 {
+		t.Fatalf("failed %d pending jobs, want 0", n)
+	}
+	got, ok := js.Get(job.ID)
+	if !ok || got.Status != JobPending {
+		t.Fatalf("pending job status=%s", got.Status)
+	}
+}
+
+func TestFailRunningForNodeFailsPending(t *testing.T) {
+	js, err := NewJobStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := js.Create(JobTypeInference, "n1", Requirements{GPURequired: true, ModelName: "tinyllama"}, map[string]any{"prompt": "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !js.Assign(job.ID, "n1") {
+		t.Fatal("assign")
+	}
+	n := js.FailRunningForNode("n1", "node left cluster")
+	if n != 1 {
+		t.Fatalf("failed %d jobs, want 1", n)
+	}
+	got, ok := js.Get(job.ID)
+	if !ok || got.Status != JobFailed {
+		t.Fatalf("status=%s", got.Status)
+	}
+}

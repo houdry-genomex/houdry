@@ -215,10 +215,16 @@ func (o *Ollama) loadedVRAM(ctx context.Context) int64 {
 }
 
 func (o *Ollama) shouldCompact(ctx context.Context, in InferRequest) bool {
+	// Hermes Agent dumps ~80k chars + dozens of tool schemas even for "hi".
+	// Compact those on GPU as well as CPU; a 4 GiB card still prompt-evals
+	// that payload for minutes with no tokens, and the client times out.
+	if hugeAgentDump(in) {
+		return true
+	}
 	if o.loadedVRAM(ctx) > 0 {
 		return false
 	}
-	return o.inferenceOnCPU(ctx) || hugeAgentDump(in)
+	return o.inferenceOnCPU(ctx)
 }
 
 func (o *Ollama) EnsureModel(ctx context.Context, name, tag string) (Model, error) {

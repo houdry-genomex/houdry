@@ -223,15 +223,22 @@ func (js *JobStore) CountByStatus(status string) int {
 }
 
 // FailRunningForNode fails in-flight jobs when a node goes offline.
-// Phase 3 does not migrate work.
+// Phase 3 does not migrate work. Pending (assigned, not yet claimed) and
+// running jobs are both failed — the worker is gone and will not claim.
 func (js *JobStore) FailRunningForNode(nodeID, errMsg string) int {
-	return js.FailRunningExcept(nodeID, "", errMsg)
+	return js.failInFlight(nodeID, "", errMsg, true)
 }
 
-// FailRunningExcept fails running/pending jobs for nodeID except keepJobID
-// (the job the worker says it is still executing). An empty keepJobID fails
-// all of them — used on join after a worker restart.
+// FailRunningExcept fails running jobs for nodeID except keepJobID (the job
+// the worker says it is still executing). Pending jobs are left alone: they
+// are waiting to be claimed, and a heartbeat with an empty current_job_id is
+// the idle worker, not a crash. An empty keepJobID fails every running job —
+// used on join after a worker restart (in-memory execution is gone).
 func (js *JobStore) FailRunningExcept(nodeID, keepJobID, errMsg string) int {
+	return js.failInFlight(nodeID, keepJobID, errMsg, false)
+}
+
+func (js *JobStore) failInFlight(nodeID, keepJobID, errMsg string, includePending bool) int {
 	js.mu.Lock()
 	defer js.mu.Unlock()
 	n := 0
@@ -240,7 +247,13 @@ func (js *JobStore) FailRunningExcept(nodeID, keepJobID, errMsg string) int {
 		if j.NodeID != nodeID {
 			continue
 		}
-		if j.Status != JobRunning && j.Status != JobPending {
+		switch j.Status {
+		case JobRunning:
+		case JobPending:
+			if !includePending {
+				continue
+			}
+		default:
 			continue
 		}
 		if keepJobID != "" && j.ID == keepJobID {
