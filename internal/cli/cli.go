@@ -15,6 +15,7 @@ import (
 	"houdry/internal/agent"
 	"houdry/internal/config"
 	"houdry/internal/discovery"
+	"houdry/internal/firewall"
 	"houdry/internal/gpu"
 	"houdry/internal/server"
 	"houdry/internal/version"
@@ -867,6 +868,20 @@ func runServe(args []string) error {
 	if env := os.Getenv("HOODRY_TOKEN"); *token == "" && env != "" {
 		*token = env
 	}
+
+	// Automatically configure Windows Firewall to allow incoming connections
+	port, err := firewall.ExtractPortFromAddr(*listen)
+	if err == nil && port > 0 {
+		ruleName := fmt.Sprintf("Houdry Control Plane (port %d)", port)
+		if err := firewall.EnsurePortOpen(port, ruleName); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Could not configure Windows Firewall: %v\n", err)
+			fmt.Fprintf(os.Stderr, "To allow incoming connections, manually run as Administrator:\n")
+			fmt.Fprintf(os.Stderr, "  netsh advfirewall firewall add rule name=\"%s\" dir=in action=allow protocol=TCP localport=%d\n", ruleName, port)
+		} else {
+			fmt.Printf("Windows Firewall: port %d allowed for incoming connections\n", port)
+		}
+	}
+
 	fmt.Printf("Houdry server %s listening on http://%s\n", version.Version, *listen)
 	if !*noOpenAI {
 		fmt.Printf("OpenAI-compatible API: POST http://<host>:%s/v1/chat/completions  (model=auto)\n", portOf(*listen))
