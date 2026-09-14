@@ -959,15 +959,20 @@ func loadJoinConfig(serverURL, token string) (*config.Config, error) {
 		cfg.Server = strings.TrimRight(serverURL, "/")
 	} else if v := os.Getenv("HOODRY_SERVER"); v != "" {
 		cfg.Server = strings.TrimRight(v, "/")
-	} else if saved != "" {
-		cfg.Server = saved
 	} else {
+		// Always try discovery first, fall back to cached config only if discovery fails
 		ep, err := discovery.Resolve(context.Background(), 3*time.Second)
-		if err != nil {
-			return nil, err
+		if err == nil {
+			// Discovery succeeded - use the discovered endpoint
+			cfg.Server = ep.URL
+			fmt.Printf("Found Houdry on WiFi: %s\n", ep.APIBase())
+		} else if saved != "" {
+			// Discovery failed but we have a cached config - use it
+			cfg.Server = saved
+		} else {
+			// No discovery and no cached config
+			return nil, fmt.Errorf("no server URL: pass --server, set HOODRY_SERVER, or run houdry serve on this WiFi")
 		}
-		cfg.Server = ep.URL
-		fmt.Printf("Found Houdry on WiFi: %s\n", ep.APIBase())
 	}
 	if token != "" {
 		cfg.Token = token
