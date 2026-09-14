@@ -27,17 +27,24 @@ func EnsurePortOpen(port int, ruleName string) error {
 		return nil
 	}
 
-	// Try to add the firewall rule
+	// Try to add the firewall rule with explicit profile=any to ensure it works on all network types
 	cmd := exec.Command("netsh", "advfirewall", "firewall", "add", "rule",
 		fmt.Sprintf("name=%s", ruleName),
 		"dir=in",
 		"action=allow",
 		"protocol=TCP",
-		fmt.Sprintf("localport=%d", port))
+		fmt.Sprintf("localport=%d", port),
+		"profile=any")
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to add firewall rule (try running as Administrator): %w\nOutput: %s", err, string(output))
+	}
+
+	// Check if Windows Firewall has "Block all inbound connections" enabled
+	// This setting overrides individual Allow rules and is common on Public networks
+	if err := checkBlockAllInbound(); err != nil {
+		return fmt.Errorf("firewall rule added, but: %w", err)
 	}
 
 	return nil
@@ -58,4 +65,33 @@ func ruleExists(ruleName string) (bool, error) {
 
 	// If we get here and no error, the rule exists
 	return true, nil
+}
+
+// checkBlockAllInbound checks if Windows Firewall has "Block all inbound connections" enabled
+// This setting overrides individual Allow rules
+func checkBlockAllInbound() error {
+	// Check all three profiles: Domain, Private, Public
+	profiles := []string{"domainprofile", "privateprofile", "publicprofile"}
+	blockedProfiles := []string{}
+
+	for _, profile := range profiles {
+		cmd := exec.Command("netsh", "advfirewall", "show", profile, "state")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			// If we can't check, assume it's OK rather than failing
+			continue
+		}
+
+		// Look for "Block all connections" or "BlockAllInbound"
+		outputStr := string(output)
+		if strings.Contains(outputStr, "Block all connections") && strings.Contains(outputStr, "Yes") {
+			blockedProfiles = append(blockedProfiles, profile)
+		}
+	}
+
+	if len(blockedProfiles) > 0 {
+		return fmt.Errorf("Windows Firewall 'Block all inbound connections' is enabled for %v. This overrides individual allow rules. Disable it or manually allow the port in Windows Defender Firewall settings", blockedProfiles)
+	}
+
+	return nil
 }
