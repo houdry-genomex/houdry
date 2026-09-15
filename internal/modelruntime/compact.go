@@ -8,7 +8,6 @@ import "strings"
 const (
 	slowRuntimeSystemChars = 4000
 	slowRuntimeNumCtx      = 4096
-	slowRuntimeMaxTokens   = 128
 )
 
 func compactSlowInference(in InferRequest) InferRequest {
@@ -32,9 +31,6 @@ func compactSlowInference(in InferRequest) InferRequest {
 	}
 	if out.Options.NumCtx <= 0 || out.Options.NumCtx > slowRuntimeNumCtx {
 		out.Options.NumCtx = slowRuntimeNumCtx
-	}
-	if out.Options.MaxTokens <= 0 || out.Options.MaxTokens > slowRuntimeMaxTokens {
-		out.Options.MaxTokens = slowRuntimeMaxTokens
 	}
 	return out
 }

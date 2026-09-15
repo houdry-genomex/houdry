@@ -188,7 +188,7 @@ func (o *Ollama) resolveNumCtx(ctx context.Context, ref string, requested int) i
 // how num_ctx came to be missing from all three at once.
 func (o *Ollama) buildOptions(ctx context.Context, ref string, in InferOptions) map[string]any {
 	opts := map[string]any{}
-	if in.MaxTokens > 0 {
+	if in.MaxTokens != 0 {
 		opts["num_predict"] = in.MaxTokens
 	}
 	if in.Temperature != nil {

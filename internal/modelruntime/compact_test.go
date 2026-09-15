@@ -27,8 +27,8 @@ func TestCompactSlowInferenceTruncatesHermesDump(t *testing.T) {
 	if out.Options.NumCtx != slowRuntimeNumCtx {
 		t.Fatalf("num_ctx=%d", out.Options.NumCtx)
 	}
-	if out.Options.MaxTokens != slowRuntimeMaxTokens {
-		t.Fatalf("max_tokens=%d", out.Options.MaxTokens)
+	if out.Options.MaxTokens != 1024 {
+		t.Fatalf("max_tokens=%d, compaction must not cap generation length", out.Options.MaxTokens)
 	}
 }
 

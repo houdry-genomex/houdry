@@ -185,11 +185,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			payload["tool_choice"] = tc
 		}
 	}
-	if req.MaxTokens != nil && *req.MaxTokens > 0 && *req.MaxTokens <= 1024 {
+	if req.MaxTokens != nil && *req.MaxTokens > 0 {
 		payload["max_tokens"] = *req.MaxTokens
-	} else if req.MaxTokens == nil && len(req.Tools) > 0 {
-		// Tool-using agents need more headroom than short greeting replies.
-		payload["max_tokens"] = 256
 	}
 	if req.Temperature != nil {
 		payload["temperature"] = *req.Temperature

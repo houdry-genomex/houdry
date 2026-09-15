@@ -59,7 +59,7 @@ type InferRequest struct {
 
 // InferOptions are portable hints; adapters map what they support.
 type InferOptions struct {
-	// MaxTokens caps generated tokens (Ollama: num_predict).
+	// MaxTokens is Ollama num_predict. -1 means generate until the model stops.
 	MaxTokens int `json:"max_tokens,omitempty"`
 	// KeepAlive keeps the model resident after inference (e.g. "30m", "-1").
 	KeepAlive   string   `json:"keep_alive,omitempty"`

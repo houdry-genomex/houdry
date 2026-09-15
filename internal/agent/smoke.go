@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"houdry/internal/gpuruntime"
@@ -142,52 +141,14 @@ func payloadToolChoice(v any) json.RawMessage {
 	return raw
 }
 
-// inferOptionsFor keeps simple replies short and models warm in VRAM when
-// the client doesn't specify max_tokens. If the client explicitly sets
-// max_tokens, we honor it completely - no artificial caps.
-func inferOptionsFor(job server.Job, prompt string, hasTools bool) modelruntime.InferOptions {
+// inferOptionsFor does not cap generation length. Ollama's default
+// num_predict is 128, so MaxTokens -1 (infinite) is required for full answers.
+// Control-plane payload max_tokens is ignored: older servers inject 256 for
+// Hermes tool calls, which truncated replies.
+func inferOptionsFor(job server.Job, _ string, _ bool) modelruntime.InferOptions {
 	opts := modelruntime.InferOptions{
 		KeepAlive: "45m",
-		MaxTokens: 0, // 0 = use model default (no limit)
-	}
-
-	// If client explicitly set max_tokens, honor it exactly - no caps
-	if v, ok := job.Payload["max_tokens"].(float64); ok && v > 0 {
-		opts.MaxTokens = int(v)
-		// Client knows what they want, don't override with heuristics
-		if v, ok := job.Payload["temperature"].(float64); ok {
-			t := v
-			opts.Temperature = &t
-		}
-		return opts
-	}
-
-	// Only apply heuristics when client didn't specify max_tokens
-	complexity := ""
-	if route, ok := job.Payload["route"].(map[string]any); ok {
-		if c, _ := route["complexity"].(string); c != "" {
-			complexity = c
-		}
-	}
-	switch strings.ToLower(complexity) {
-	case "low":
-		opts.MaxTokens = 512
-	case "medium":
-		opts.MaxTokens = 2048
-	case "high":
-		opts.MaxTokens = 8192
-	default:
-		// Heuristic when job was submitted without a route profile.
-		if len(prompt) < 80 {
-			opts.MaxTokens = 512
-		} else if len(prompt) < 400 {
-			opts.MaxTokens = 2048
-		} else {
-			opts.MaxTokens = 8192
-		}
-	}
-	if hasTools && opts.MaxTokens < 2048 {
-		opts.MaxTokens = 2048
+		MaxTokens: -1,
 	}
 	if v, ok := job.Payload["temperature"].(float64); ok {
 		t := v
