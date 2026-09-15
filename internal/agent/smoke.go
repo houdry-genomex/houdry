@@ -142,17 +142,27 @@ func payloadToolChoice(v any) json.RawMessage {
 	return raw
 }
 
-// Agent clients often send max_tokens=65536 meaning "no limit". Passing that
-// to Ollama as num_predict makes a 1.5B CPU generate hang for tens of minutes
-// while Houdry Agent sits on "waiting on auto".
-const maxInferenceTokens = 8192
-
-// inferOptionsFor keeps simple replies short and models warm in VRAM.
+// inferOptionsFor keeps simple replies short and models warm in VRAM when
+// the client doesn't specify max_tokens. If the client explicitly sets
+// max_tokens, we honor it completely - no artificial caps.
 func inferOptionsFor(job server.Job, prompt string, hasTools bool) modelruntime.InferOptions {
 	opts := modelruntime.InferOptions{
 		KeepAlive: "45m",
-		MaxTokens: 256,
+		MaxTokens: 0, // 0 = use model default (no limit)
 	}
+
+	// If client explicitly set max_tokens, honor it exactly - no caps
+	if v, ok := job.Payload["max_tokens"].(float64); ok && v > 0 {
+		opts.MaxTokens = int(v)
+		// Client knows what they want, don't override with heuristics
+		if v, ok := job.Payload["temperature"].(float64); ok {
+			t := v
+			opts.Temperature = &t
+		}
+		return opts
+	}
+
+	// Only apply heuristics when client didn't specify max_tokens
 	complexity := ""
 	if route, ok := job.Payload["route"].(map[string]any); ok {
 		if c, _ := route["complexity"].(string); c != "" {
@@ -161,29 +171,23 @@ func inferOptionsFor(job server.Job, prompt string, hasTools bool) modelruntime.
 	}
 	switch strings.ToLower(complexity) {
 	case "low":
-		opts.MaxTokens = 64
-	case "medium":
-		opts.MaxTokens = 256
-	case "high":
 		opts.MaxTokens = 512
+	case "medium":
+		opts.MaxTokens = 2048
+	case "high":
+		opts.MaxTokens = 8192
 	default:
 		// Heuristic when job was submitted without a route profile.
 		if len(prompt) < 80 {
-			opts.MaxTokens = 64
-		} else if len(prompt) < 400 {
-			opts.MaxTokens = 256
-		} else {
 			opts.MaxTokens = 512
+		} else if len(prompt) < 400 {
+			opts.MaxTokens = 2048
+		} else {
+			opts.MaxTokens = 8192
 		}
 	}
-	if hasTools && opts.MaxTokens < 256 {
-		opts.MaxTokens = 256
-	}
-	if v, ok := job.Payload["max_tokens"].(float64); ok && v > 0 && v <= float64(maxInferenceTokens) {
-		opts.MaxTokens = int(v)
-	}
-	if opts.MaxTokens > maxInferenceTokens {
-		opts.MaxTokens = maxInferenceTokens
+	if hasTools && opts.MaxTokens < 2048 {
+		opts.MaxTokens = 2048
 	}
 	if v, ok := job.Payload["temperature"].(float64); ok {
 		t := v
