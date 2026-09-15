@@ -145,7 +145,7 @@ func payloadToolChoice(v any) json.RawMessage {
 // Agent clients often send max_tokens=65536 meaning "no limit". Passing that
 // to Ollama as num_predict makes a 1.5B CPU generate hang for tens of minutes
 // while Houdry Agent sits on "waiting on auto".
-const maxInferenceTokens = 1024
+const maxInferenceTokens = 8192
 
 // inferOptionsFor keeps simple replies short and models warm in VRAM.
 func inferOptionsFor(job server.Job, prompt string, hasTools bool) modelruntime.InferOptions {
