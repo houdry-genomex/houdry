@@ -16,29 +16,48 @@ func EnsurePortOpen(port int, ruleName string) error {
 		ruleName = fmt.Sprintf("Houdry Control Plane (port %d)", port)
 	}
 
-	// Check if rule already exists
+	// Check if TCP rule already exists
 	exists, err := ruleExists(ruleName)
 	if err != nil {
 		return fmt.Errorf("failed to check firewall rule: %w", err)
 	}
 
-	if exists {
-		// Rule already exists, nothing to do
-		return nil
+	if !exists {
+		// Add TCP firewall rule with explicit profile=any to ensure it works on all network types
+		cmd := exec.Command("netsh", "advfirewall", "firewall", "add", "rule",
+			fmt.Sprintf("name=%s", ruleName),
+			"dir=in",
+			"action=allow",
+			"protocol=TCP",
+			fmt.Sprintf("localport=%d", port),
+			"profile=any")
+
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to add TCP firewall rule (try running as Administrator): %w\nOutput: %s", err, string(output))
+		}
 	}
 
-	// Try to add the firewall rule with explicit profile=any to ensure it works on all network types
-	cmd := exec.Command("netsh", "advfirewall", "firewall", "add", "rule",
-		fmt.Sprintf("name=%s", ruleName),
-		"dir=in",
-		"action=allow",
-		"protocol=TCP",
-		fmt.Sprintf("localport=%d", port),
-		"profile=any")
-
-	output, err := cmd.CombinedOutput()
+	// Also add UDP port 41808 for WiFi discovery (mDNS + UDP broadcast)
+	udpRuleName := "Houdry WiFi Discovery (UDP 41808)"
+	udpExists, err := ruleExists(udpRuleName)
 	if err != nil {
-		return fmt.Errorf("failed to add firewall rule (try running as Administrator): %w\nOutput: %s", err, string(output))
+		return fmt.Errorf("failed to check UDP firewall rule: %w", err)
+	}
+
+	if !udpExists {
+		cmd := exec.Command("netsh", "advfirewall", "firewall", "add", "rule",
+			fmt.Sprintf("name=%s", udpRuleName),
+			"dir=in",
+			"action=allow",
+			"protocol=UDP",
+			"localport=41808",
+			"profile=any")
+
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to add UDP firewall rule (try running as Administrator): %w\nOutput: %s", err, string(output))
+		}
 	}
 
 	// Check if Windows Firewall has "Block all inbound connections" enabled
