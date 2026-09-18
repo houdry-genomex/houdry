@@ -142,10 +142,10 @@ True token-by-token runtime streaming is a later enhancement.
 houdry serve --listen 0.0.0.0:18080
 
 # Terminal 2 — node agent with GPU + model runtime
-houdry node join --server http://127.0.0.1:18080
+houdry node join --server https://127.0.0.1:18080
 
 # Terminal 3
-curl http://127.0.0.1:18080/v1/chat/completions \
+curl --cacert "$HOME/.houdry/server/pki/root_ca.crt" https://127.0.0.1:18080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "auto",
@@ -160,7 +160,7 @@ curl http://127.0.0.1:18080/v1/chat/completions \
 Point the OpenHands LLM base URL at Houdry:
 
 ```text
-OPENAI_API_BASE=http://127.0.0.1:18080/v1
+OPENAI_API_BASE=https://127.0.0.1:18080/v1
 OPENAI_API_KEY=houdry   # any non-empty value if the server has no token;
                         # otherwise use the Houdry serve --token value
 ```

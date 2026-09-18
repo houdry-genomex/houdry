@@ -21,6 +21,17 @@ const (
 	StatusOffline  = "OFFLINE"  // heartbeat timed out or left
 )
 
+// Cryptographic identity lifecycle (independent of READY/BUSY).
+const (
+	IdentityUnknown   = "UNKNOWN"
+	IdentityPending   = "PENDING"
+	IdentityEnrolling = "ENROLLING"
+	IdentityCertified = "CERTIFIED"
+	IdentityActive    = "ACTIVE"
+	IdentitySuspended = "SUSPENDED"
+	IdentityRevoked   = "REVOKED"
+)
+
 // Node is a machine registered with the Houdry control plane.
 type Node struct {
 	gpu.Inventory
@@ -31,9 +42,13 @@ type Node struct {
 	Runtimes      []string             `json:"runtimes,omitempty"` // GPU runtimes (nvidia, inventory, …)
 	ModelRuntimes []string             `json:"model_runtimes,omitempty"`
 	Models        []modelruntime.Model `json:"models,omitempty"`
-	JoinedAt      time.Time            `json:"joined_at"`
-	LastSeen      time.Time            `json:"last_seen"`
-	RemoteIP      string               `json:"remote_ip,omitempty"`
+	JoinedAt        time.Time `json:"joined_at"`
+	LastSeen        time.Time `json:"last_seen"`
+	RemoteIP        string    `json:"remote_ip,omitempty"`
+	Identity        string    `json:"identity,omitempty"`
+	CertFingerprint string    `json:"cert_fingerprint,omitempty"`
+	CertSerial      string    `json:"cert_serial,omitempty"`
+	CertNotAfter    time.Time `json:"cert_not_after,omitempty"`
 }
 
 type Store struct {
@@ -80,6 +95,14 @@ func (s *Store) Upsert(n Node) Node {
 		}
 		if n.Models == nil {
 			n.Models = existing.Models
+		}
+		if n.Identity == "" {
+			n.Identity = existing.Identity
+		}
+		if n.CertFingerprint == "" {
+			n.CertFingerprint = existing.CertFingerprint
+			n.CertSerial = existing.CertSerial
+			n.CertNotAfter = existing.CertNotAfter
 		}
 	} else if n.JoinedAt.IsZero() {
 		n.JoinedAt = time.Now().UTC()
@@ -141,6 +164,9 @@ func (s *Store) Heartbeat(n Node) (Node, bool) {
 	}
 	if n.RemoteIP != "" {
 		existing.RemoteIP = n.RemoteIP
+	}
+	if n.Identity != "" {
+		existing.Identity = n.Identity
 	}
 	existing.LastSeen = time.Now().UTC()
 	s.nodes[n.NodeID] = existing
@@ -232,6 +258,19 @@ func (s *Store) List() []Node {
 		out = append(out, n)
 	}
 	return out
+}
+
+func (s *Store) SetIdentity(id, identity string) (Node, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, ok := s.nodes[id]
+	if !ok {
+		return Node{}, false
+	}
+	n.Identity = identity
+	s.nodes[id] = n
+	_ = s.saveLocked()
+	return n, true
 }
 
 func (s *Store) Get(id string) (Node, bool) {

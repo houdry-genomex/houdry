@@ -1,8 +1,6 @@
 package server
 
 import (
-	"context"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -11,22 +9,14 @@ import (
 )
 
 func TestSchedulerPrefersNodeWithModel(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test"})
 
-	// Node A: GPU ok, runtime ok, no model
-	joinModelNode(t, ts.URL, "node-a", "RTX 2050", 4<<30, []string{"ollama"}, nil)
-	// Node B: has the model
-	joinModelNode(t, ts.URL, "node-b", "RTX 4060", 8<<30, []string{"ollama"}, []modelruntime.Model{
+	joinModelNode(t, env, "node-a", "RTX 2050", 4<<30, []string{"ollama"}, nil)
+	joinModelNode(t, env, "node-b", "RTX 4060", 8<<30, []string{"ollama"}, []modelruntime.Model{
 		{Name: "tinyllama", Tag: "latest", Runtime: "ollama", State: modelruntime.StateAvailable},
 	})
 
-	job, err := SubmitInference(context.Background(), ts.URL, "", "tinyllama", "Say hello", "", Requirements{
+	job, err := SubmitInference(env.PublicCtx(), env.URL, "", "tinyllama", "Say hello", "", Requirements{
 		GPURequired: true,
 		Model:       "tinyllama",
 	})
@@ -42,22 +32,16 @@ func TestSchedulerPrefersNodeWithModel(t *testing.T) {
 }
 
 func TestSchedulerRespectsRuntimePreference(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test"})
 
-	joinModelNode(t, ts.URL, "node-ollama", "RTX 2050", 4<<30, []string{"ollama"}, []modelruntime.Model{
+	joinModelNode(t, env, "node-ollama", "RTX 2050", 4<<30, []string{"ollama"}, []modelruntime.Model{
 		{Name: "qwen", Tag: "7b", Runtime: "ollama", State: modelruntime.StateAvailable},
 	})
-	joinModelNode(t, ts.URL, "node-vllm", "RTX 4060", 8<<30, []string{"vllm"}, []modelruntime.Model{
+	joinModelNode(t, env, "node-vllm", "RTX 4060", 8<<30, []string{"vllm"}, []modelruntime.Model{
 		{Name: "qwen", Tag: "7b", Runtime: "vllm", State: modelruntime.StateAvailable},
 	})
 
-	job, err := SubmitInference(context.Background(), ts.URL, "", "qwen:7b", "hi", "", Requirements{
+	job, err := SubmitInference(env.PublicCtx(), env.URL, "", "qwen:7b", "hi", "", Requirements{
 		GPURequired:  true,
 		Model:        "qwen:7b",
 		ModelRuntime: "vllm",
@@ -71,17 +55,11 @@ func TestSchedulerRespectsRuntimePreference(t *testing.T) {
 }
 
 func TestSchedulerRequireModelPresent(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test"})
 
-	joinModelNode(t, ts.URL, "node-a", "RTX 2050", 4<<30, []string{"ollama"}, nil)
+	joinModelNode(t, env, "node-a", "RTX 2050", 4<<30, []string{"ollama"}, nil)
 
-	job, err := SubmitInference(context.Background(), ts.URL, "", "missing-model", "hi", "", Requirements{
+	job, err := SubmitInference(env.PublicCtx(), env.URL, "", "missing-model", "hi", "", Requirements{
 		GPURequired:         true,
 		Model:               "missing-model",
 		RequireModelPresent: true,
@@ -95,15 +73,9 @@ func TestSchedulerRequireModelPresent(t *testing.T) {
 }
 
 func TestInferenceJobRequiresPrompt(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test"})
 
-	_, err = SubmitJobFull(context.Background(), ts.URL, "", JobTypeInference, "", Requirements{
+	_, err := SubmitJobFull(env.PublicCtx(), env.URL, "", JobTypeInference, "", Requirements{
 		GPURequired: true,
 		Model:       "tinyllama",
 	}, map[string]any{})
@@ -112,7 +84,7 @@ func TestInferenceJobRequiresPrompt(t *testing.T) {
 	}
 }
 
-func joinModelNode(t *testing.T, url, id, gpuName string, vram uint64, modelRTs []string, models []modelruntime.Model) {
+func joinModelNode(t *testing.T, env *tlsEnv, id, gpuName string, vram uint64, modelRTs []string, models []modelruntime.Model) {
 	t.Helper()
 	inv := gpu.Inventory{
 		NodeID:     id,
@@ -123,7 +95,8 @@ func joinModelNode(t *testing.T, url, id, gpuName string, vram uint64, modelRTs 
 			Name: gpuName, MemoryTotalBytes: vram, Source: "test",
 		}},
 	}
-	_, err := JoinAgent(context.Background(), url, "", JoinRequest{
+	ctx := env.Enroll(id)
+	_, err := JoinAgent(ctx, env.URL, "", JoinRequest{
 		Inventory:     inv,
 		AgentVersion:  "test",
 		Status:        StatusReady,

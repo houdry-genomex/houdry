@@ -1,11 +1,13 @@
 package config
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const dirName = ".houdry"
@@ -39,11 +41,31 @@ func Load() (*Config, error) {
 		}
 		return nil, err
 	}
+	b = stripJSONPreamble(b)
+	if len(b) == 0 {
+		return &Config{}, nil
+	}
 	var c Config
 	if err := json.Unmarshal(b, &c); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", Path(), err)
 	}
+	c.Server = httpsURL(c.Server)
 	return &c, nil
+}
+
+func httpsURL(raw string) string {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if strings.HasPrefix(raw, "http://") {
+		return "https://" + strings.TrimPrefix(raw, "http://")
+	}
+	return raw
+}
+
+// stripJSONPreamble drops a UTF-8 BOM and surrounding whitespace.
+// Windows PowerShell 5.1 `Set-Content -Encoding UTF8` writes a BOM, and
+// encoding/json rejects it as `invalid character 'ï'`.
+func stripJSONPreamble(b []byte) []byte {
+	return bytes.TrimSpace(bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF}))
 }
 
 func (c *Config) Save() error {

@@ -52,7 +52,7 @@ type Info struct {
 // Endpoint is a reachable control plane.
 type Endpoint struct {
 	Name         string `json:"name"`
-	URL          string `json:"url"` // http://host:port, no trailing slash
+	URL          string `json:"url"` // https://host:port, no trailing slash
 	Path         string `json:"path"`
 	API          string `json:"api"` // URL + path, what Agent uses as base_url
 	Version      string `json:"version,omitempty"`
@@ -158,7 +158,7 @@ func txtRecords(info Info) []string {
 		"version=" + info.Version,
 		"auth=" + auth,
 		"openai=" + openai,
-		"proto=http",
+		"proto=https",
 	}
 }
 
@@ -225,7 +225,7 @@ func httpURL(ip net.IP, port int) string {
 	if ip.To4() == nil {
 		host = "[" + host + "]"
 	}
-	return fmt.Sprintf("http://%s:%d", host, port)
+	return fmt.Sprintf("https://%s:%d", host, port)
 }
 
 func parseListenPort(listen string) (int, error) {

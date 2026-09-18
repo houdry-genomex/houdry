@@ -1,8 +1,6 @@
 package server
 
 import (
-	"context"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -10,13 +8,7 @@ import (
 )
 
 func TestAgentHeartbeatAndJobSmoke(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test"})
 
 	inv := gpu.Inventory{
 		NodeID:     "agent-1",
@@ -30,7 +22,8 @@ func TestAgentHeartbeatAndJobSmoke(t *testing.T) {
 			Source:           "nvidia-smi",
 		}},
 	}
-	n, err := JoinAgent(context.Background(), ts.URL, "", JoinRequest{
+	ctx := env.Enroll("agent-1")
+	n, err := JoinAgent(ctx, env.URL, "", JoinRequest{
 		Inventory:    inv,
 		AgentVersion: "test",
 		Status:       StatusReady,
@@ -42,7 +35,7 @@ func TestAgentHeartbeatAndJobSmoke(t *testing.T) {
 		t.Fatalf("status=%s", n.Status)
 	}
 
-	hb, err := Heartbeat(context.Background(), ts.URL, "", JoinRequest{
+	hb, err := Heartbeat(ctx, env.URL, "", JoinRequest{
 		Inventory:    inv,
 		AgentVersion: "test",
 		Status:       StatusReady,
@@ -54,7 +47,7 @@ func TestAgentHeartbeatAndJobSmoke(t *testing.T) {
 		t.Fatalf("heartbeat status=%s", hb.Status)
 	}
 
-	job, err := SubmitJob(context.Background(), ts.URL, "", JobTypeGPUSmoke, "agent-1")
+	job, err := SubmitJob(env.PublicCtx(), env.URL, "", JobTypeGPUSmoke, "agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +58,7 @@ func TestAgentHeartbeatAndJobSmoke(t *testing.T) {
 		t.Fatalf("node_id=%s", job.NodeID)
 	}
 
-	claimed, ok, err := ClaimJob(context.Background(), ts.URL, "", "agent-1")
+	claimed, ok, err := ClaimJob(ctx, env.URL, "", "agent-1")
 	if err != nil || !ok {
 		t.Fatalf("claim ok=%v err=%v", ok, err)
 	}
@@ -73,7 +66,7 @@ func TestAgentHeartbeatAndJobSmoke(t *testing.T) {
 		t.Fatalf("%+v", claimed)
 	}
 
-	nodes, err := ListNodes(context.Background(), ts.URL, "")
+	nodes, err := ListNodes(env.PublicCtx(), env.URL, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +74,7 @@ func TestAgentHeartbeatAndJobSmoke(t *testing.T) {
 		t.Fatalf("expected BUSY, got %s", nodes[0].Status)
 	}
 
-	done, err := ReportJobResult(context.Background(), ts.URL, "", claimed.ID, "agent-1", true, map[string]any{
+	done, err := ReportJobResult(ctx, env.URL, "", claimed.ID, "agent-1", true, map[string]any{
 		"gpu_count": 1,
 	}, "")
 	if err != nil {
@@ -91,7 +84,7 @@ func TestAgentHeartbeatAndJobSmoke(t *testing.T) {
 		t.Fatalf("%+v", done)
 	}
 
-	nodes, err = ListNodes(context.Background(), ts.URL, "")
+	nodes, err = ListNodes(env.PublicCtx(), env.URL, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,15 +94,9 @@ func TestAgentHeartbeatAndJobSmoke(t *testing.T) {
 }
 
 func TestInventoryJoinIsJoinedNotReady(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
-
-	got, err := Join(context.Background(), ts.URL, "", gpu.Inventory{NodeID: "snap"})
+	env := startTLSServer(t, Options{})
+	ctx := env.Enroll("snap")
+	got, err := Join(ctx, env.URL, "", gpu.Inventory{NodeID: "snap"})
 	if err != nil {
 		t.Fatal(err)
 	}

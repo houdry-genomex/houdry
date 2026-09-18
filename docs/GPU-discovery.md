@@ -148,6 +148,23 @@ when reported. The current parser intentionally treats “shared” or “dynami
 memory as unknown, so Apple unified memory is not reported as GPU memory. This
 path does not provide live utilization, temperature, or driver version.
 
+## Join a control plane (mTLS)
+
+On the machine running `houdry serve`:
+
+```bash
+houdry node enroll create
+```
+
+Share the `HDRY_` token with the GPU host. `houdry node join` / `gpu register`
+enroll automatically (HTTPS, no client cert), then heartbeat over mTLS:
+
+```bash
+houdry gpu register --server https://HOST:18080 --token HDRY_…
+```
+
+See [security/Enrollment.md](security/Enrollment.md). There is no HTTP fallback.
+
 ## Installation
 
 ### Public GitHub release (friends / any machine)
@@ -162,7 +179,7 @@ curl -fsSL https://github.com/houdry-genomex/houdry/releases/latest/download/ins
 export PATH="$HOME/.houdry/bin:$PATH"
 houdry version
 houdry gpu detect
-houdry node join --server http://HOST:18080
+houdry node join --server https://HOST:18080
 ```
 
 ```powershell
@@ -170,7 +187,7 @@ houdry node join --server http://HOST:18080
 irm https://github.com/houdry-genomex/houdry/releases/latest/download/install.ps1 | iex
 & "$HOME\.houdry\bin\houdry.exe" version
 & "$HOME\.houdry\bin\houdry.exe" gpu detect
-& "$HOME\.houdry\bin\houdry.exe" node join --server http://HOST:18080
+& "$HOME\.houdry\bin\houdry.exe" node join --server https://HOST:18080
 ```
 
 Install places the binary in `~/.houdry/bin` (Windows:
@@ -184,10 +201,10 @@ IP/hostname (do not type `HOST` literally):
 
 ```bash
 # Linux or macOS
-curl -fsSL http://HOST:18080/install.sh | sh
+curl -fsSL --cacert "$HOME/.houdry/server/pki/root_ca.crt" https://HOST:18080/install.sh | sh
 
 # Windows PowerShell
-irm http://HOST:18080/install.ps1 | iex
+irm https://HOST:18080/install.ps1 | iex
 ```
 
 Git Bash, MSYS2, and Cygwin can use `install.sh`; it maps those environments to

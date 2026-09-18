@@ -5,6 +5,7 @@ go 1.23.0
 require (
 	github.com/grandcat/zeroconf v1.0.0
 	golang.org/x/net v0.38.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

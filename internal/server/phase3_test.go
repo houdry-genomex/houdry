@@ -1,15 +1,13 @@
 package server
 
 import (
-	"context"
-	"net/http/httptest"
 	"testing"
 	"time"
 
 	"houdry/internal/gpu"
 )
 
-func joinReadyNode(t *testing.T, url, id, name string, vram uint64) Node {
+func joinReadyNode(t *testing.T, env *tlsEnv, id, name string, vram uint64) Node {
 	t.Helper()
 	inv := gpu.Inventory{
 		NodeID:     id,
@@ -24,7 +22,8 @@ func joinReadyNode(t *testing.T, url, id, name string, vram uint64) Node {
 			Source:           "nvidia-smi",
 		}},
 	}
-	n, err := JoinAgent(context.Background(), url, "", JoinRequest{
+	ctx := env.Enroll(id)
+	n, err := JoinAgent(ctx, env.URL, "", JoinRequest{
 		Inventory:    inv,
 		AgentVersion: "test",
 		Status:       StatusReady,
@@ -40,18 +39,12 @@ func joinReadyNode(t *testing.T, url, id, name string, vram uint64) Node {
 }
 
 func TestSchedulerSelectsByVRAM(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test"})
 
-	joinReadyNode(t, ts.URL, "node-01", "RTX 2050", 4<<30)
-	joinReadyNode(t, ts.URL, "node-02", "RTX 4060", 8<<30)
+	joinReadyNode(t, env, "node-01", "RTX 2050", 4<<30)
+	joinReadyNode(t, env, "node-02", "RTX 4060", 8<<30)
 
-	job, err := SubmitJobWithRequirements(context.Background(), ts.URL, "", JobTypeGPUSmoke, "", Requirements{
+	job, err := SubmitJobWithRequirements(env.PublicCtx(), env.URL, "", JobTypeGPUSmoke, "", Requirements{
 		GPURequired:  true,
 		MinVRAMBytes: 6 << 30,
 	})
@@ -67,17 +60,12 @@ func TestSchedulerSelectsByVRAM(t *testing.T) {
 }
 
 func TestSchedulerQueuesWhenNoFit(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test"})
+	s := env.S
 
-	joinReadyNode(t, ts.URL, "node-01", "RTX 2050", 4<<30)
+	joinReadyNode(t, env, "node-01", "RTX 2050", 4<<30)
 
-	job, err := SubmitJobWithRequirements(context.Background(), ts.URL, "", JobTypeGPUSmoke, "", Requirements{
+	job, err := SubmitJobWithRequirements(env.PublicCtx(), env.URL, "", JobTypeGPUSmoke, "", Requirements{
 		GPURequired:  true,
 		MinVRAMBytes: 6 << 30,
 	})
@@ -89,7 +77,7 @@ func TestSchedulerQueuesWhenNoFit(t *testing.T) {
 	}
 
 	// Larger node joins → queue drains onto it.
-	joinReadyNode(t, ts.URL, "node-02", "RTX 4060", 8<<30)
+	joinReadyNode(t, env, "node-02", "RTX 4060", 8<<30)
 	got, ok := s.jobs.Get(job.ID)
 	if !ok || got.Status != JobPending || got.NodeID != "node-02" {
 		t.Fatalf("expected assigned to node-02, got %+v", got)
@@ -97,19 +85,14 @@ func TestSchedulerQueuesWhenNoFit(t *testing.T) {
 }
 
 func TestOfflineExcludedFromScheduling(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test"})
+	s := env.S
 
-	joinReadyNode(t, ts.URL, "node-01", "RTX 2050", 4<<30)
-	joinReadyNode(t, ts.URL, "node-02", "RTX 4060", 8<<30)
+	joinReadyNode(t, env, "node-01", "RTX 2050", 4<<30)
+	joinReadyNode(t, env, "node-02", "RTX 4060", 8<<30)
 	s.store.SetStatus("node-02", StatusOffline, "")
 
-	job, err := SubmitJobWithRequirements(context.Background(), ts.URL, "", JobTypeGPUSmoke, "", Requirements{
+	job, err := SubmitJobWithRequirements(env.PublicCtx(), env.URL, "", JobTypeGPUSmoke, "", Requirements{
 		GPURequired:  true,
 		MinVRAMBytes: 6 << 30,
 	})
@@ -122,26 +105,20 @@ func TestOfflineExcludedFromScheduling(t *testing.T) {
 }
 
 func TestDrainRejectsNewClaims(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test"})
 
-	joinReadyNode(t, ts.URL, "node-01", "RTX 2050", 4<<30)
-	if _, err := DrainNode(context.Background(), ts.URL, "", "node-01"); err != nil {
+	joinReadyNode(t, env, "node-01", "RTX 2050", 4<<30)
+	if _, err := DrainNode(env.Enroll("node-01"), env.URL, "", "node-01"); err != nil {
 		t.Fatal(err)
 	}
-	job, err := SubmitJob(context.Background(), ts.URL, "", JobTypeGPUSmoke, "")
+	job, err := SubmitJob(env.PublicCtx(), env.URL, "", JobTypeGPUSmoke, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if job.Status != JobQueued {
 		t.Fatalf("draining node must not receive jobs: %+v", job)
 	}
-	_, ok, err := ClaimJob(context.Background(), ts.URL, "", "node-01")
+	_, ok, err := ClaimJob(env.Enroll("node-01"), env.URL, "", "node-01")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,15 +128,9 @@ func TestDrainRejectsNewClaims(t *testing.T) {
 }
 
 func TestRuntimeProbesNotCountedAsGPUs(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test"})
 
-	n := joinReadyNode(t, ts.URL, "node-01", "RTX 2050", 4<<30)
+	n := joinReadyNode(t, env, "node-01", "RTX 2050", 4<<30)
 	if TotalPhysicalGPUs([]Node{n}) != 1 {
 		t.Fatalf("gpus=%d", TotalPhysicalGPUs([]Node{n}))
 	}
@@ -185,5 +156,22 @@ func TestFitsUsesAvailableVRAM(t *testing.T) {
 	}
 	if !Fits(n, Requirements{GPURequired: true, MinVRAMBytes: 2 << 30}) {
 		t.Fatal("should accept 2GB requirement")
+	}
+}
+
+func TestFitsRejectsNonActiveIdentity(t *testing.T) {
+	n := Node{
+		Status:   StatusReady,
+		Identity: IdentitySuspended,
+		Resources: ResourceProfile{
+			Static: StaticResources{GPUs: []StaticGPU{{ID: "g1", MemoryTotalBytes: 8 << 30}}},
+		},
+	}
+	if Fits(n, Requirements{GPURequired: true}) {
+		t.Fatal("suspended node must not receive jobs")
+	}
+	n.Identity = IdentityActive
+	if !Fits(n, Requirements{GPURequired: true}) {
+		t.Fatal("active node should fit")
 	}
 }

@@ -16,14 +16,7 @@ import (
 )
 
 func TestJoinAndList(t *testing.T) {
-	dir := t.TempDir()
-	s, err := New(Options{DataDir: dir, Version: "test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ts := httptest.NewServer(s)
-	defer ts.Close()
-
+	env := startTLSServer(t, Options{Version: "test"})
 	used := 40
 	inv := gpu.Inventory{
 		NodeID:     "node-1",
@@ -38,7 +31,8 @@ func TestJoinAndList(t *testing.T) {
 			Source:           "nvidia-smi",
 		}},
 	}
-	got, err := Join(context.Background(), ts.URL, "", inv)
+	ctx := env.Enroll("node-1")
+	got, err := Join(ctx, env.URL, "", inv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +40,7 @@ func TestJoinAndList(t *testing.T) {
 		t.Errorf("node_id=%v", got["node_id"])
 	}
 
-	nodes, err := ListNodes(context.Background(), ts.URL, "")
+	nodes, err := ListNodes(env.PublicCtx(), env.URL, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +48,7 @@ func TestJoinAndList(t *testing.T) {
 		t.Fatalf("%+v", nodes)
 	}
 
-	resp, err := http.Get(ts.URL + "/")
+	resp, err := env.Get("/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +57,7 @@ func TestJoinAndList(t *testing.T) {
 		t.Fatal(resp.Status)
 	}
 
-	resp, err = http.Get(ts.URL + "/install.sh")
+	resp, err = env.Get("/install.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,14 +67,14 @@ func TestJoinAndList(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(b)
-	if !strings.Contains(body, ts.URL) {
+	if !strings.Contains(body, env.URL) {
 		t.Fatalf("install.sh missing server url: %s", body[:min(200, len(body))])
 	}
 	if !strings.Contains(body, "houdry gpu register") {
 		t.Fatal("install.sh missing gpu register instructions")
 	}
 
-	resp, err = http.Get(ts.URL + "/.well-known/houdry.json")
+	resp, err = env.Get("/.well-known/houdry.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,22 +89,31 @@ func TestJoinAndList(t *testing.T) {
 	if meta["houdry"] != "control-plane" {
 		t.Fatalf("%v", meta)
 	}
+	if meta["tls"] != true {
+		t.Fatalf("tls=%v", meta["tls"])
+	}
+	if meta["enroll"] != "/v1/nodes/enroll" {
+		t.Fatalf("enroll=%v", meta["enroll"])
+	}
 }
 
 func TestJoinRequiresToken(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Token: "secret"})
-	if err != nil {
+	env := startTLSServer(t, Options{Token: "secret"})
+
+	_, err := Join(context.Background(), env.URL, "", gpu.Inventory{NodeID: "x"})
+	if err == nil {
+		t.Fatal("expected join without client cert to fail")
+	}
+
+	ctx := env.Enroll("x")
+	if _, err := Join(ctx, env.URL, "secret", gpu.Inventory{NodeID: "x"}); err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewServer(s)
-	defer ts.Close()
 
-	_, err = Join(context.Background(), ts.URL, "", gpu.Inventory{NodeID: "x"})
-	if err == nil {
-		t.Fatal("expected unauthorized")
+	if _, err := ListNodes(env.PublicCtx(), env.URL, ""); err == nil {
+		t.Fatal("expected list without admin token to fail")
 	}
-	_, err = Join(context.Background(), ts.URL, "secret", gpu.Inventory{NodeID: "x"})
-	if err != nil {
+	if _, err := ListNodes(env.PublicCtx(), env.URL, "secret"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -141,6 +144,7 @@ func TestDownloadSelf(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer s.Close()
 	ts := httptest.NewServer(s)
 	defer ts.Close()
 

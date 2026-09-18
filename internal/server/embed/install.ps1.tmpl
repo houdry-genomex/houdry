@@ -39,7 +39,10 @@ Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
 
 $config = @{ server = $Server; node_id = "" } | ConvertTo-Json
 New-Item -ItemType Directory -Force -Path $homeDir | Out-Null
-Set-Content -Path (Join-Path $homeDir "config.json") -Value $config -Encoding UTF8
+# Windows PowerShell 5.1 `Set-Content -Encoding UTF8` writes a UTF-8 BOM that
+# Go's encoding/json rejects (`invalid character 'ï'`).
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+[System.IO.File]::WriteAllText((Join-Path $homeDir "config.json"), $config, $utf8NoBom)
 
 if ($os -eq "windows") {
   $userPath = [Environment]::GetEnvironmentVariable("Path", "User")

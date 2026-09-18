@@ -28,7 +28,7 @@ flowchart TB
   end
 
   subgraph fabric [Fabric: houdry serve]
-    HTTP["HTTP API + dashboard"]
+    HTTP["HTTPS + mTLS API + dashboard"]
     LAN["WiFi announce mDNS plus UDP"]
     Router["Router"]
     Catalog["Model catalog"]
@@ -170,9 +170,9 @@ houdry discover
 
 Houdry Agent: join the same WiFi, pick the fabric URL in onboarding. If one control plane is visible, the URL fills in. Confirm with Connect.
 
-If several control planes answer, pass `--server http://HOST:8080` (nodes) or pick the URL in Agent. Guest WiFi that isolates clients blocks this; use a URL in that case. `houdry serve --no-lan-discover` turns announce off.
+If several control planes answer, pass `--server https://HOST:8080` (nodes) or pick the URL in Agent. Guest WiFi that isolates clients blocks this; use a URL in that case. `houdry serve --no-lan-discover` turns announce off.
 
-Agent and other OpenAI clients use `http://<host>:8080/v1`. The machine also serves `GET /.well-known/houdry.json` so a discovered address can be confirmed.
+Agent and other OpenAI clients use `https://<host>:8080/v1` and must trust the Houdry Root CA (`$HOUDRY_HOME/server/pki/root_ca.crt`). The machine also serves `GET /.well-known/houdry.json` so a discovered address can be confirmed. Node APIs require a client certificate issued during enrollment (`houdry node enroll create` on the plane, then `houdry gpu register` on the GPU host). See [docs/security](docs/security/PKI.md).
 
 ## Run a cluster
 
@@ -187,23 +187,24 @@ houdry gpu detect
 houdry gpu register
 
 # Terminal 3
-houdry node list --server http://127.0.0.1:8080
-houdry job submit gpu.smoke --server http://127.0.0.1:8080 --wait
-houdry job submit inference --model tinyllama --prompt "Say hello in one sentence." --wait --server http://127.0.0.1:8080
-houdry route --prompt "Refactor this Go function and add tests" --execute --wait --server http://127.0.0.1:8080
+houdry node list --server https://127.0.0.1:8080
+houdry job submit gpu.smoke --server https://127.0.0.1:8080 --wait
+houdry job submit inference --model tinyllama --prompt "Say hello in one sentence." --wait --server https://127.0.0.1:8080
+houdry route --prompt "Refactor this Go function and add tests" --execute --wait --server https://127.0.0.1:8080
 ```
 
-Dashboard: `http://127.0.0.1:8080/`. Extra GPU machines: `houdry gpu detect` then `houdry gpu register`. Ctrl+C drains, waits for the current job, then leaves.
+Dashboard: `https://127.0.0.1:8080/`. Extra GPU machines: `houdry gpu detect` then `houdry gpu register`. Ctrl+C drains, waits for the current job, then leaves.
 
-OpenAI-shaped chat on the fabric:
+OpenAI-shaped chat on the fabric (trust the local CA; `--cacert` or `SSL_CERT_FILE`):
 
 ```bash
-curl http://127.0.0.1:8080/v1/chat/completions \
+curl --cacert "$HOME/.houdry/server/pki/root_ca.crt" \
+  https://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d "{\"model\":\"auto\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hello\"}]}"
 ```
 
-Point Houdry Agent or any OpenAI SDK at `http://<host>:8080/v1`. Pass `--token` on `serve` to require `X-Houdry-Token` or `Authorization: Bearer`.
+Point Houdry Agent or any OpenAI SDK at `https://<host>:8080/v1`. Pass `--token` on `serve` to require `X-Houdry-Token` or `Authorization: Bearer`.
 
 ## Same laptop, no GPU node yet
 
@@ -213,7 +214,7 @@ Start Ollama, pull at least one model, then start the control plane. Chat, strea
 houdry serve --listen 0.0.0.0:8080
 ```
 
-Point Agent or an SDK at `http://127.0.0.1:8080/v1`. When a GPU host later registers, the same URL starts dispatching cluster jobs.
+Point Agent or an SDK at `https://127.0.0.1:8080/v1`. When a GPU host later registers, the same URL starts dispatching cluster jobs.
 
 CAD is a tool, not a model pick. An attached drawing plus CAD wording (for example "STEP file", "3d model") runs `scripts/cad/houdry_pipeline.py`: a vision model reads the drawing, a code model writes CadQuery, OpenCascade exports STEP. Setup: `scripts/cad/setup.sh`. STEP files land under `--data` (default `~/.houdry/server/generated`) and are served at `/files/`.
 
@@ -277,6 +278,10 @@ houdry version
 | GET | `/install.sh`, `/install.ps1`, `/download/{os}/{arch}` | Installer and binary |
 
 State is JSON on disk under `--data` (default `~/.houdry/server`): node registry, `jobs.json`, and `model-catalog.json` (seeded from the built-in catalog on first run).
+
+## Security
+
+HTTPS everywhere. Node APIs require a client certificate; OpenAI `/v1` does not. Enrollment uses one-time `HDRY_` tokens (`houdry node enroll create`). Docs: [PKI](docs/security/PKI.md), [Enrollment](docs/security/Enrollment.md), [mTLS](docs/security/mTLS.md), [Certificate rotation](docs/security/Certificate-Rotation.md), [Revocation](docs/security/Revocation.md), [Threat model](docs/security/Threat-Model.md).
 
 ## Build
 

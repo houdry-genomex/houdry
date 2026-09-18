@@ -11,7 +11,7 @@ func TestProbeRoundTrip(t *testing.T) {
 	}
 	ep := complete(Endpoint{
 		Name:         "houdry-lab",
-		URL:          "http://192.168.1.10:8080",
+		URL:          "https://192.168.1.10:8080",
 		Path:         "/v1",
 		Version:      "0.6.0",
 		AuthRequired: true,
@@ -22,7 +22,7 @@ func TestProbeRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("advertise not recognized")
 	}
-	if got.URL != ep.URL || got.API != "http://192.168.1.10:8080/v1" {
+	if got.URL != ep.URL || got.API != "https://192.168.1.10:8080/v1" {
 		t.Fatalf("%+v", got)
 	}
 	if !got.AuthRequired || !got.OpenAI || got.Name != "houdry-lab" {
@@ -37,7 +37,7 @@ func TestTXTRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("txt")
 	}
-	if ep.API != "http://10.0.0.5:8080/v1" {
+	if ep.API != "https://10.0.0.5:8080/v1" {
 		t.Fatalf("api=%s", ep.API)
 	}
 	if ep.AuthRequired {
@@ -60,9 +60,9 @@ func TestPickIPPrefersV4LAN(t *testing.T) {
 
 func TestUniqueByURL(t *testing.T) {
 	in := []Endpoint{
-		complete(Endpoint{URL: "http://a:8080", Name: "", Source: "udp"}),
-		complete(Endpoint{URL: "http://a:8080", Name: "desk", Source: "mdns"}),
-		complete(Endpoint{URL: "http://b:8080", Name: "other", Source: "udp"}),
+		complete(Endpoint{URL: "https://a:8080", Name: "", Source: "udp"}),
+		complete(Endpoint{URL: "https://a:8080", Name: "desk", Source: "mdns"}),
+		complete(Endpoint{URL: "https://b:8080", Name: "other", Source: "udp"}),
 	}
 	out := unique(in)
 	if len(out) != 2 {

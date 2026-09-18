@@ -149,6 +149,9 @@ func Fits(n Node, req Requirements) bool {
 	if n.Status != StatusReady {
 		return false
 	}
+	if n.Identity != "" && n.Identity != IdentityActive {
+		return false
+	}
 
 	needsGPU := req.GPURequired || req.MinVRAMBytes > 0 || req.ModelIdentity().Name != ""
 	gpus := n.Resources.Static.GPUs

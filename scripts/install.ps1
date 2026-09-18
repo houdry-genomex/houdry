@@ -44,11 +44,24 @@ $dest = Join-Path $binDir "houdry$ext"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
 
+# Windows PowerShell 5.1 `Set-Content -Encoding UTF8` writes a UTF-8 BOM.
+# Go's encoding/json then fails with: invalid character 'ï' looking for beginning of value.
+function Write-Utf8NoBom([string]$Path, [string]$Value) {
+  $enc = New-Object System.Text.UTF8Encoding $false
+  [System.IO.File]::WriteAllText($Path, $Value, $enc)
+}
+
 $configPath = Join-Path $homeDir "config.json"
 if (-not (Test-Path $configPath)) {
   $server = if ($env:HOODRY_SERVER) { $env:HOODRY_SERVER } else { "" }
   $config = @{ server = $server; node_id = "" } | ConvertTo-Json
-  Set-Content -Path $configPath -Value $config -Encoding UTF8
+  Write-Utf8NoBom $configPath $config
+} else {
+  $raw = [System.IO.File]::ReadAllBytes($configPath)
+  if ($raw.Length -ge 3 -and $raw[0] -eq 0xEF -and $raw[1] -eq 0xBB -and $raw[2] -eq 0xBF) {
+    $text = [System.Text.Encoding]::UTF8.GetString($raw, 3, $raw.Length - 3)
+    Write-Utf8NoBom $configPath $text
+  }
 }
 
 if ($os -eq "windows") {

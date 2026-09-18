@@ -22,6 +22,7 @@ func TestReleaseCLISurface(t *testing.T) {
 		"houdry serve",
 		"houdry discover",
 		"houdry version",
+		"houdry node enroll",
 		"houdry gpu detect",
 		"houdry gpu register",
 	}

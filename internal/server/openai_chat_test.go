@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -17,9 +15,10 @@ import (
 	"houdry/internal/routing"
 )
 
-func startFakeInferenceWorker(t *testing.T, baseURL string, nodeID string) context.CancelFunc {
+func startFakeInferenceWorker(t *testing.T, env *tlsEnv, nodeID string) context.CancelFunc {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
+	nodeCtx := env.Enroll(nodeID)
 	go func() {
 		for {
 			select {
@@ -27,7 +26,7 @@ func startFakeInferenceWorker(t *testing.T, baseURL string, nodeID string) conte
 				return
 			default:
 			}
-			job, ok, err := ClaimJob(context.Background(), baseURL, "", nodeID)
+			job, ok, err := ClaimJob(nodeCtx, env.URL, "", nodeID)
 			if err != nil || !ok {
 				time.Sleep(50 * time.Millisecond)
 				continue
@@ -60,13 +59,13 @@ func startFakeInferenceWorker(t *testing.T, baseURL string, nodeID string) conte
 					result["output_tokens"] = 12
 				}
 			}
-			_, _ = ReportJobResult(context.Background(), baseURL, "", job.ID, nodeID, true, result, "")
+			_, _ = ReportJobResult(nodeCtx, env.URL, "", job.ID, nodeID, true, result, "")
 		}
 	}()
 	return cancel
 }
 
-func joinChatTestNode(t *testing.T, url, id string, models []modelruntime.Model) {
+func joinChatTestNode(t *testing.T, env *tlsEnv, id string, models []modelruntime.Model) {
 	t.Helper()
 	inv := gpu.Inventory{
 		NodeID: id, DetectedAt: time.Now().UTC(),
@@ -76,7 +75,8 @@ func joinChatTestNode(t *testing.T, url, id string, models []modelruntime.Model)
 			Name: "RTX 2050", MemoryTotalBytes: 4 << 30, Source: "test",
 		}},
 	}
-	_, err := JoinAgent(context.Background(), url, "", JoinRequest{
+	ctx := env.Enroll(id)
+	_, err := JoinAgent(ctx, env.URL, "", JoinRequest{
 		Inventory:     inv,
 		AgentVersion:  "test",
 		Status:        StatusReady,
@@ -90,19 +90,13 @@ func joinChatTestNode(t *testing.T, url, id string, models []modelruntime.Model)
 }
 
 func TestChatCompletionsAutoUsesRouter(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test", OpenAIWait: 5 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test", OpenAIWait: 5 * time.Second})
 
-	joinChatTestNode(t, ts.URL, "node-1", []modelruntime.Model{
+	joinChatTestNode(t, env, "node-1", []modelruntime.Model{
 		{Name: "tinyllama", Tag: "latest", Runtime: "ollama", State: modelruntime.StateAvailable},
 		{Name: "qwen2.5-coder", Tag: "1.5b", Runtime: "ollama", State: modelruntime.StateAvailable},
 	})
-	stop := startFakeInferenceWorker(t, ts.URL, "node-1")
+	stop := startFakeInferenceWorker(t, env, "node-1")
 	defer stop()
 
 	body := map[string]any{
@@ -112,7 +106,7 @@ func TestChatCompletionsAutoUsesRouter(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(body)
-	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", bytes.NewReader(raw))
+	resp, err := env.Post("/v1/chat/completions", "application/json", bytes.NewReader(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,22 +139,16 @@ func TestChatCompletionsAutoUsesRouter(t *testing.T) {
 }
 
 func TestChatCompletionsExplicitModel(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test", OpenAIWait: 5 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test", OpenAIWait: 5 * time.Second})
 
-	joinChatTestNode(t, ts.URL, "node-1", []modelruntime.Model{
+	joinChatTestNode(t, env, "node-1", []modelruntime.Model{
 		{Name: "tinyllama", Tag: "latest", Runtime: "ollama", State: modelruntime.StateAvailable},
 	})
-	stop := startFakeInferenceWorker(t, ts.URL, "node-1")
+	stop := startFakeInferenceWorker(t, env, "node-1")
 	defer stop()
 
 	body := `{"model":"tinyllama:latest","messages":[{"role":"user","content":"Hi"}]}`
-	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	resp, err := env.Post("/v1/chat/completions", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,15 +165,9 @@ func TestChatCompletionsExplicitModel(t *testing.T) {
 }
 
 func TestChatCompletionsInvalidMessages(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{})
 
-	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"auto","messages":[]}`))
+	resp, err := env.Post("/v1/chat/completions", "application/json", strings.NewReader(`{"model":"auto","messages":[]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,13 +183,7 @@ func TestChatCompletionsInvalidMessages(t *testing.T) {
 }
 
 func TestChatCompletionsUnavailableModel(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{})
 
 	// READY GPU node but no model runtime → cannot serve LLM inference.
 	inv := gpu.Inventory{
@@ -215,7 +191,8 @@ func TestChatCompletionsUnavailableModel(t *testing.T) {
 		Host: gpu.Host{Hostname: "n1", OS: "linux", Arch: "amd64"},
 		GPUs: []gpu.GPU{{Index: 0, ID: "g1", Vendor: gpu.VendorNVIDIA, Name: "RTX 2050", MemoryTotalBytes: 4 << 30, Source: "test"}},
 	}
-	_, err = JoinAgent(context.Background(), ts.URL, "", JoinRequest{
+	ctx := env.Enroll("node-1")
+	_, err := JoinAgent(ctx, env.URL, "", JoinRequest{
 		Inventory: inv, AgentVersion: "test", Status: StatusReady, Runtimes: []string{"nvidia"},
 	})
 	if err != nil {
@@ -223,7 +200,7 @@ func TestChatCompletionsUnavailableModel(t *testing.T) {
 	}
 
 	body := `{"model":"tinyllama:latest","messages":[{"role":"user","content":"Hi"}]}`
-	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	resp, err := env.Post("/v1/chat/completions", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,16 +212,10 @@ func TestChatCompletionsUnavailableModel(t *testing.T) {
 }
 
 func TestChatCompletionsNoREADYGPU(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), DisableLocalInference: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{DisableLocalInference: true})
 
 	body := `{"model":"auto","messages":[{"role":"user","content":"Hi"}]}`
-	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	resp, err := env.Post("/v1/chat/completions", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,15 +227,9 @@ func TestChatCompletionsNoREADYGPU(t *testing.T) {
 }
 
 func TestChatCompletionsDisabled(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), DisableOpenAICompat: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{DisableOpenAICompat: true})
 
-	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"auto","messages":[{"role":"user","content":"x"}]}`))
+	resp, err := env.Post("/v1/chat/completions", "application/json", strings.NewReader(`{"model":"auto","messages":[{"role":"user","content":"x"}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,15 +240,9 @@ func TestChatCompletionsDisabled(t *testing.T) {
 }
 
 func TestExistingAPIsUnaffected(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), DisableLocalInference: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{DisableLocalInference: true})
 
-	resp, err := http.Get(ts.URL + "/healthz")
+	resp, err := env.Get("/healthz")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +250,7 @@ func TestExistingAPIsUnaffected(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatal(resp.Status)
 	}
-	resp, err = http.Get(ts.URL + "/v1/nodes")
+	resp, err = env.Get("/v1/nodes")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +258,7 @@ func TestExistingAPIsUnaffected(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatal(resp.Status)
 	}
-	resp, err = http.Get(ts.URL + "/v1/models")
+	resp, err = env.Get("/v1/models")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,20 +276,14 @@ func TestExistingAPIsUnaffected(t *testing.T) {
 }
 
 func TestOpenAIModelsListsInstalledOnWorkers(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), DisableLocalInference: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{DisableLocalInference: true})
 
-	joinChatTestNode(t, ts.URL, "node-1", []modelruntime.Model{
+	joinChatTestNode(t, env, "node-1", []modelruntime.Model{
 		{Name: "tinyllama", Tag: "latest", Runtime: "ollama", State: modelruntime.StateAvailable},
 		{Name: "qwen2.5-coder", Tag: "1.5b", Runtime: "ollama", State: modelruntime.StateAvailable},
 	})
 
-	resp, err := http.Get(ts.URL + "/v1/models")
+	resp, err := env.Get("/v1/models")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,28 +313,22 @@ func TestOpenAIModelsListsInstalledOnWorkers(t *testing.T) {
 }
 
 func TestChatCompletionsGoesThroughRouteMetadata(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test", OpenAIWait: 5 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test", OpenAIWait: 5 * time.Second})
 
-	joinChatTestNode(t, ts.URL, "node-1", []modelruntime.Model{
+	joinChatTestNode(t, env, "node-1", []modelruntime.Model{
 		{Name: "tinyllama", Tag: "latest", Runtime: "ollama", State: modelruntime.StateAvailable},
 	})
-	stop := startFakeInferenceWorker(t, ts.URL, "node-1")
+	stop := startFakeInferenceWorker(t, env, "node-1")
 	defer stop()
 
 	body := `{"model":"auto","messages":[{"role":"user","content":"Say hello"}]}`
-	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	resp, err := env.Post("/v1/chat/completions", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
 
-	jobs := s.jobs.List()
+	jobs := env.S.jobs.List()
 	if len(jobs) == 0 {
 		t.Fatal("expected inference job")
 	}
@@ -399,19 +346,13 @@ func TestChatCompletionsGoesThroughRouteMetadata(t *testing.T) {
 }
 
 func TestChatCompletionsAutoWithToolsSelectsCoder(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test", OpenAIWait: 5 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test", OpenAIWait: 5 * time.Second})
 
-	joinChatTestNode(t, ts.URL, "node-1", []modelruntime.Model{
+	joinChatTestNode(t, env, "node-1", []modelruntime.Model{
 		{Name: "tinyllama", Tag: "latest", Runtime: "ollama", State: modelruntime.StateLoaded},
 		{Name: "qwen2.5-coder", Tag: "1.5b", Runtime: "ollama", State: modelruntime.StateAvailable},
 	})
-	stop := startFakeInferenceWorker(t, ts.URL, "node-1")
+	stop := startFakeInferenceWorker(t, env, "node-1")
 	defer stop()
 
 	body := map[string]any{
@@ -429,7 +370,7 @@ func TestChatCompletionsAutoWithToolsSelectsCoder(t *testing.T) {
 		}},
 	}
 	raw, _ := json.Marshal(body)
-	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", bytes.NewReader(raw))
+	resp, err := env.Post("/v1/chat/completions", "application/json", bytes.NewReader(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,18 +387,12 @@ func TestChatCompletionsAutoWithToolsSelectsCoder(t *testing.T) {
 }
 
 func TestChatCompletionsAutoToolsFallsBackWhenCoderMissing(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test", OpenAIWait: 5 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test", OpenAIWait: 5 * time.Second})
 
-	joinChatTestNode(t, ts.URL, "node-1", []modelruntime.Model{
+	joinChatTestNode(t, env, "node-1", []modelruntime.Model{
 		{Name: "tinyllama", Tag: "latest", Runtime: "ollama", State: modelruntime.StateAvailable},
 	})
-	stop := startFakeInferenceWorker(t, ts.URL, "node-1")
+	stop := startFakeInferenceWorker(t, env, "node-1")
 	defer stop()
 
 	body := map[string]any{
@@ -474,7 +409,7 @@ func TestChatCompletionsAutoToolsFallsBackWhenCoderMissing(t *testing.T) {
 		}},
 	}
 	raw, _ := json.Marshal(body)
-	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", bytes.NewReader(raw))
+	resp, err := env.Post("/v1/chat/completions", "application/json", bytes.NewReader(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,20 +428,14 @@ func TestChatCompletionsAutoToolsFallsBackWhenCoderMissing(t *testing.T) {
 }
 
 func TestChatCompletionsExplicitTinyllamaWithToolsRejected(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test"})
 
-	joinChatTestNode(t, ts.URL, "node-1", []modelruntime.Model{
+	joinChatTestNode(t, env, "node-1", []modelruntime.Model{
 		{Name: "tinyllama", Tag: "latest", Runtime: "ollama", State: modelruntime.StateAvailable},
 	})
 
 	body := `{"model":"tinyllama:latest","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"x","parameters":{}}}]}`
-	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	resp, err := env.Post("/v1/chat/completions", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -518,18 +447,12 @@ func TestChatCompletionsExplicitTinyllamaWithToolsRejected(t *testing.T) {
 }
 
 func TestChatCompletionsPreservesToolsAndReturnsToolCalls(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test", OpenAIWait: 5 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test", OpenAIWait: 5 * time.Second})
 
-	joinChatTestNode(t, ts.URL, "node-1", []modelruntime.Model{
+	joinChatTestNode(t, env, "node-1", []modelruntime.Model{
 		{Name: "qwen2.5-coder", Tag: "1.5b", Runtime: "ollama", State: modelruntime.StateAvailable},
 	})
-	stop := startFakeInferenceWorker(t, ts.URL, "node-1")
+	stop := startFakeInferenceWorker(t, env, "node-1")
 	defer stop()
 
 	body := map[string]any{
@@ -554,7 +477,7 @@ func TestChatCompletionsPreservesToolsAndReturnsToolCalls(t *testing.T) {
 		"tool_choice": "auto",
 	}
 	raw, _ := json.Marshal(body)
-	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", bytes.NewReader(raw))
+	resp, err := env.Post("/v1/chat/completions", "application/json", bytes.NewReader(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,7 +487,7 @@ func TestChatCompletionsPreservesToolsAndReturnsToolCalls(t *testing.T) {
 		t.Fatalf("status=%d body=%s", resp.StatusCode, data)
 	}
 
-	jobs := s.jobs.List()
+	jobs := env.S.jobs.List()
 	if len(jobs) == 0 {
 		t.Fatal("expected job")
 	}
@@ -627,26 +550,20 @@ func TestPickNodeModelSkipsUnfittable7b(t *testing.T) {
 }
 
 func TestChatCompletionsBusyNodePicksFittingCoderNot7b(t *testing.T) {
-	s, err := New(Options{DataDir: t.TempDir(), Version: "test", OpenAIWait: 5 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+	env := startTLSServer(t, Options{Version: "test", OpenAIWait: 5 * time.Second})
 
-	joinChatTestNode(t, ts.URL, "node-1", []modelruntime.Model{
+	joinChatTestNode(t, env, "node-1", []modelruntime.Model{
 		{Name: "qwen2.5-coder", Tag: "7b", Runtime: "ollama", State: modelruntime.StateAvailable, SizeBytes: 4683087561},
 		{Name: "qwen2.5-coder", Tag: "1.5b", Runtime: "ollama", State: modelruntime.StateAvailable, SizeBytes: 986062089},
 		{Name: "tinyllama", Tag: "latest", Runtime: "ollama", State: modelruntime.StateAvailable},
 	})
-	s.store.SetStatus("node-1", StatusBusy, "job-other")
-	stop := startFakeInferenceWorker(t, ts.URL, "node-1")
+	env.S.store.SetStatus("node-1", StatusBusy, "job-other")
+	stop := startFakeInferenceWorker(t, env, "node-1")
 	defer stop()
 	go func() {
 		time.Sleep(80 * time.Millisecond)
-		s.store.SetStatus("node-1", StatusReady, "")
-		s.tryScheduleQueued()
+		env.S.store.SetStatus("node-1", StatusReady, "")
+		env.S.tryScheduleQueued()
 	}()
 
 	body := map[string]any{
@@ -664,7 +581,7 @@ func TestChatCompletionsBusyNodePicksFittingCoderNot7b(t *testing.T) {
 		}},
 	}
 	raw, _ := json.Marshal(body)
-	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", bytes.NewReader(raw))
+	resp, err := env.Post("/v1/chat/completions", "application/json", bytes.NewReader(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -674,7 +591,7 @@ func TestChatCompletionsBusyNodePicksFittingCoderNot7b(t *testing.T) {
 		t.Fatalf("status=%d body=%s", resp.StatusCode, data)
 	}
 	var found string
-	for _, j := range s.jobs.List() {
+	for _, j := range env.S.jobs.List() {
 		if ref := j.Requirements.ModelIdentity().Ref(); strings.Contains(ref, "qwen2.5-coder") {
 			found = ref
 		}

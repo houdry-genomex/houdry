@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -68,7 +69,16 @@ func probeJSON(ctx context.Context, url string) bool {
 	if err != nil {
 		return false
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client := http.DefaultClient
+	if strings.HasPrefix(url, "https://") {
+		client = &http.Client{
+			Timeout: 1500 * time.Millisecond,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // discovery reachability; identity is mTLS later
+			},
+		}
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}

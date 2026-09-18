@@ -13,10 +13,14 @@ import (
 	"time"
 
 	"houdry/internal/agent"
+	"houdry/internal/audit"
 	"houdry/internal/config"
 	"houdry/internal/discovery"
+	"houdry/internal/enrollment"
 	"houdry/internal/firewall"
 	"houdry/internal/gpu"
+	"houdry/internal/pki"
+	"houdry/internal/securitycfg"
 	"houdry/internal/server"
 	"houdry/internal/version"
 )
@@ -59,7 +63,7 @@ func printUsage(w io.Writer) {
 Usage:
   houdry gpu detect
   houdry gpu register
-  houdry node join|list|drain|leave …
+  houdry node join|list|drain|leave|enroll|revoke|suspend|resume|cert
   houdry model list [--server URL] [--json]
   houdry route --prompt TEXT [--execute] [--wait] [--runtime NAME]
   houdry job submit gpu.smoke|inference …
@@ -74,6 +78,7 @@ from Houdry Agent.
 
   houdry gpu detect
   houdry gpu register
+  houdry node enroll create
   houdry node list
   houdry job submit gpu.smoke --wait
   houdry serve --listen 0.0.0.0:8080
@@ -137,7 +142,12 @@ func runJoin(args []string) error {
 		return err
 	}
 	inv := gpu.Detect(context.Background(), cfg.NodeID)
-	result, err := server.Join(context.Background(), cfg.Server, cfg.Token, inv)
+	ctx, url, err := server.DialNode(context.Background(), cfg.Server, cfg.Token, cfg.NodeID)
+	if err != nil {
+		return err
+	}
+	cfg.Server = url
+	result, err := server.Join(ctx, url, cfg.Token, inv)
 	if err != nil {
 		return err
 	}
@@ -193,12 +203,8 @@ func runList(args []string) error {
 	}
 	fmt.Printf("Joined nodes (%d) at %s\n\n", len(nodes), cfg.Server)
 	for _, n := range nodes {
-		st := n.Status
-		if st == "" {
-			st = server.StatusJoined
-		}
 		fmt.Printf("%s  %s (%s/%s)  %s  %d GPU(s)  last seen %s\n",
-			shortID(n.NodeID), n.Host.Hostname, n.Host.OS, n.Host.Arch, st, len(n.GPUs), n.LastSeen.Local().Format(time.RFC3339))
+			shortID(n.NodeID), n.Host.Hostname, n.Host.OS, n.Host.Arch, nodeStatus(n), len(n.GPUs), n.LastSeen.Local().Format(time.RFC3339))
 		for _, g := range n.GPUs {
 			fmt.Printf("    [%d] %s  %s  %s\n", g.Index, g.Vendor, g.Name, formatBytes(g.MemoryTotalBytes))
 		}
@@ -208,7 +214,7 @@ func runList(args []string) error {
 
 func runNode(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: houdry node join|list|drain|leave")
+		return errors.New("usage: houdry node join|list|drain|leave|enroll|revoke|suspend|resume|cert")
 	}
 	switch args[0] {
 	case "join":
@@ -219,6 +225,16 @@ func runNode(args []string) error {
 		return runNodeDrain(args[1:])
 	case "leave":
 		return runNodeLeave(args[1:])
+	case "enroll":
+		return runNodeEnroll(args[1:])
+	case "revoke":
+		return runNodeIdentity(server.IdentityRevoked, args[1:])
+	case "suspend":
+		return runNodeIdentity(server.IdentitySuspended, args[1:])
+	case "resume":
+		return runNodeIdentity(server.IdentityActive, args[1:])
+	case "cert":
+		return runNodeCert(args[1:])
 	default:
 		return fmt.Errorf("unknown node command %q", args[0])
 	}
@@ -262,10 +278,14 @@ func runNodeList(args []string) error {
 	if err != nil {
 		return err
 	}
-	summary, nodes, err := server.GetCluster(context.Background(), cfg.Server, cfg.Token)
+	ctx, err := apiContext(cfg)
+	if err != nil {
+		return err
+	}
+	summary, nodes, err := server.GetCluster(ctx, cfg.Server, cfg.Token)
 	if err != nil {
 		// Fall back to /v1/nodes if older server.
-		nodes, err = server.ListNodes(context.Background(), cfg.Server, cfg.Token)
+		nodes, err = server.ListNodes(ctx, cfg.Server, cfg.Token)
 		if err != nil {
 			return err
 		}
@@ -303,7 +323,7 @@ func runNodeList(args []string) error {
 			gpuName = n.GPUs[0].Name
 			vram = n.GPUs[0].MemoryTotalBytes
 		}
-		fmt.Printf("%-12s %-16s %-10s %s\n", truncate(name, 12), truncate(gpuName, 16), formatBytes(vram), n.Status)
+		fmt.Printf("%-12s %-16s %-10s %s\n", truncate(name, 12), truncate(gpuName, 16), formatBytes(vram), nodeStatus(n))
 	}
 	return nil
 }
@@ -320,7 +340,11 @@ func runNodeDrain(args []string) error {
 	if err != nil {
 		return err
 	}
-	n, err := server.DrainNode(context.Background(), cfg.Server, cfg.Token, cfg.NodeID)
+	ctx, err := nodeContext(cfg)
+	if err != nil {
+		return err
+	}
+	n, err := server.DrainNode(ctx, cfg.Server, cfg.Token, cfg.NodeID)
 	if err != nil {
 		return err
 	}
@@ -340,13 +364,191 @@ func runNodeLeave(args []string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := server.DrainNode(context.Background(), cfg.Server, cfg.Token, cfg.NodeID); err != nil {
+	ctx, err := nodeContext(cfg)
+	if err != nil {
 		return err
 	}
-	if err := server.LeaveNode(context.Background(), cfg.Server, cfg.Token, cfg.NodeID); err != nil {
+	if _, err := server.DrainNode(ctx, cfg.Server, cfg.Token, cfg.NodeID); err != nil {
+		return err
+	}
+	if err := server.LeaveNode(ctx, cfg.Server, cfg.Token, cfg.NodeID); err != nil {
 		return err
 	}
 	fmt.Printf("Node %s left the cluster\n", cfg.NodeID)
+	return nil
+}
+
+func nodeStatus(n server.Node) string {
+	st := n.Status
+	if st == "" {
+		st = server.StatusJoined
+	}
+	if n.Identity == "" {
+		return st
+	}
+	return n.Identity + "/" + st
+}
+
+func defaultServerDataDir() string {
+	return filepath.Join(config.Dir(), "server")
+}
+
+func apiContext(cfg *config.Config) (context.Context, error) {
+	ctx, url, err := server.Trust(context.Background(), cfg.Server)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Server = url
+	return ctx, nil
+}
+
+func nodeContext(cfg *config.Config) (context.Context, error) {
+	ctx, url, err := server.DialNode(context.Background(), cfg.Server, cfg.Token, cfg.NodeID)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Server = url
+	return ctx, nil
+}
+
+func runNodeEnroll(args []string) error {
+	if len(args) == 0 || args[0] != "create" {
+		return errors.New("usage: houdry node enroll create [--data DIR]")
+	}
+	fs := flag.NewFlagSet("node enroll create", flag.ContinueOnError)
+	dataDir := fs.String("data", "", "control-plane data directory (default: ~/.houdry/server)")
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if *dataDir == "" {
+		*dataDir = defaultServerDataDir()
+	}
+	sec, err := securitycfg.Load(filepath.Join(*dataDir, "security.yaml"))
+	if err != nil {
+		return err
+	}
+	st, err := enrollment.NewStore(*dataDir, sec.TokenTTL(), 1)
+	if err != nil {
+		return err
+	}
+	iss, err := st.Create()
+	if err != nil {
+		return err
+	}
+	if log, err := audit.Open(*dataDir); err == nil {
+		log.Log("TOKEN_ISSUED", "", "", "", iss.ID)
+		log.Close()
+	}
+	fmt.Println("One-time enrollment token (share with the GPU host):")
+	fmt.Println(iss.Token)
+	fmt.Printf("Expires: %s  uses: %d\n", iss.Expires.Local().Format(time.RFC3339), iss.Uses)
+	fmt.Println("On the GPU host: houdry gpu register --token <token>")
+	return nil
+}
+
+func runNodeIdentity(identity string, args []string) error {
+	fs := flag.NewFlagSet("node "+strings.ToLower(identity), flag.ContinueOnError)
+	serverURL := fs.String("server", "", "Houdry server URL (omit to edit local data dir)")
+	token := fs.String("token", "", "admin token")
+	dataDir := fs.String("data", "", "control-plane data directory (default: ~/.houdry/server)")
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	id := fs.Arg(0)
+	if id == "" {
+		return fmt.Errorf("usage: houdry node %s NODE_ID", strings.ToLower(identityCmd(identity)))
+	}
+	if *serverURL != "" || os.Getenv("HOODRY_SERVER") != "" {
+		cfg, err := loadJoinConfig(*serverURL, *token)
+		if err != nil {
+			return err
+		}
+		ctx, err := apiContext(cfg)
+		if err != nil {
+			return err
+		}
+		path := "/v1/nodes/resume"
+		switch identity {
+		case server.IdentityRevoked:
+			path = "/v1/nodes/revoke"
+		case server.IdentitySuspended:
+			path = "/v1/nodes/suspend"
+		}
+		n, err := server.AdminSetIdentity(ctx, cfg.Server, cfg.Token, path, id)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Node %s identity is now %s\n", n.NodeID, n.Identity)
+		return nil
+	}
+	if *dataDir == "" {
+		*dataDir = defaultServerDataDir()
+	}
+	st, err := server.NewStore(*dataDir)
+	if err != nil {
+		return err
+	}
+	n, ok := st.Get(id)
+	if !ok {
+		return fmt.Errorf("node %s is not registered", id)
+	}
+	if identity == server.IdentityRevoked && n.CertSerial != "" {
+		rev, err := pki.OpenRevocation(filepath.Join(*dataDir, "pki"))
+		if err != nil {
+			return err
+		}
+		if err := rev.Revoke(n.CertSerial, id); err != nil {
+			return err
+		}
+	}
+	n, _ = st.SetIdentity(id, identity)
+	if log, err := audit.Open(*dataDir); err == nil {
+		ev := "NODE_RESUMED"
+		if identity == server.IdentityRevoked {
+			ev = "CERTIFICATE_REVOKED"
+		} else if identity == server.IdentitySuspended {
+			ev = "NODE_SUSPENDED"
+		}
+		log.Log(ev, id, n.CertFingerprint, "", "")
+		log.Close()
+	}
+	fmt.Printf("Node %s identity is now %s\n", n.NodeID, n.Identity)
+	return nil
+}
+
+func identityCmd(identity string) string {
+	switch identity {
+	case server.IdentityRevoked:
+		return "revoke"
+	case server.IdentitySuspended:
+		return "suspend"
+	default:
+		return "resume"
+	}
+}
+
+func runNodeCert(args []string) error {
+	if len(args) == 0 || args[0] != "info" {
+		return errors.New("usage: houdry node cert info")
+	}
+	mat, err := pki.LoadNode(pki.NodeDir(config.Dir()))
+	if err != nil {
+		return fmt.Errorf("no node identity in %s: %w", pki.NodeDir(config.Dir()), err)
+	}
+	if !mat.HasCertificate() {
+		return errors.New("this machine is not enrolled (no node.crt)")
+	}
+	cert, err := mat.Certificate()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Node ID:     %s\n", cert.Subject.CommonName)
+	fmt.Printf("Serial:      %s\n", pki.SerialHex(cert))
+	fmt.Printf("Fingerprint: %s\n", pki.FingerprintSHA256(cert))
+	fmt.Printf("Not before:  %s\n", cert.NotBefore.UTC().Format(time.RFC3339))
+	fmt.Printf("Not after:   %s\n", cert.NotAfter.UTC().Format(time.RFC3339))
 	return nil
 }
 
@@ -882,13 +1084,13 @@ func runServe(args []string) error {
 		}
 	}
 
-	fmt.Printf("Houdry server %s listening on http://%s\n", version.Version, *listen)
+	fmt.Printf("Houdry server %s listening on https://%s\n", version.Version, *listen)
 	if !*noOpenAI {
-		fmt.Printf("OpenAI-compatible API: POST http://<host>:%s/v1/chat/completions  (model=auto)\n", portOf(*listen))
+		fmt.Printf("OpenAI-compatible API: POST https://<host>:%s/v1/chat/completions  (model=auto)\n", portOf(*listen))
 		fmt.Println("  READY GPU node → cluster job; otherwise Ollama on this machine (streaming, vision, CAD)")
 	}
-	fmt.Printf("Install (Linux/macOS): curl -fsSL http://<host>:%s/install.sh | sh\n", portOf(*listen))
-	fmt.Printf("Install (Windows):     irm http://<host>:%s/install.ps1 | iex\n", portOf(*listen))
+	fmt.Printf("Install (Linux/macOS): curl -fsSL https://<host>:%s/install.sh | sh\n", portOf(*listen))
+	fmt.Printf("Install (Windows):     irm https://<host>:%s/install.ps1 | iex\n", portOf(*listen))
 	if !*noDiscover {
 		stop, err := discovery.Advertise(discovery.Info{
 			Listen:       *listen,

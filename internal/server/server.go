@@ -15,9 +15,13 @@ import (
 	"strings"
 	"time"
 
+	"houdry/internal/audit"
+	"houdry/internal/enrollment"
 	"houdry/internal/gpu"
 	"houdry/internal/host"
 	"houdry/internal/modelruntime"
+	"houdry/internal/pki"
+	"houdry/internal/securitycfg"
 	"houdry/internal/version"
 )
 
@@ -46,11 +50,18 @@ type JoinRequest struct {
 }
 
 type Server struct {
-	opts      Options
-	store     *Store
-	jobs      *JobStore
-	mux       *http.ServeMux
-	stopSweep chan struct{}
+	opts         Options
+	store        *Store
+	jobs         *JobStore
+	mux          *http.ServeMux
+	stopSweep    chan struct{}
+	bundle       *pki.Bundle
+	enroll       *enrollment.Store
+	revoke       *pki.Revocation
+	audit        *audit.Logger
+	sec          securitycfg.Config
+	certLifetime time.Duration
+	enrollLimit  *ipLimiter
 }
 
 func New(opts Options) (*Server, error) {
@@ -68,12 +79,29 @@ func New(opts Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	sec, err := securitycfg.Load(filepath.Join(opts.DataDir, "security.yaml"))
+	if err != nil {
+		return nil, err
+	}
+	enroll, err := enrollment.NewStore(opts.DataDir, sec.TokenTTL(), 1)
+	if err != nil {
+		return nil, err
+	}
+	log, err := audit.Open(opts.DataDir)
+	if err != nil {
+		return nil, err
+	}
 	s := &Server{
-		opts:      opts,
-		store:     st,
-		jobs:      js,
-		mux:       http.NewServeMux(),
-		stopSweep: make(chan struct{}),
+		opts:         opts,
+		store:        st,
+		jobs:         js,
+		mux:          http.NewServeMux(),
+		stopSweep:    make(chan struct{}),
+		enroll:       enroll,
+		audit:        log,
+		sec:          sec,
+		certLifetime: sec.CertLifetime(),
+		enrollLimit:  newIPLimiter(sec.MaxAttempts()),
 	}
 	s.routes()
 	go s.sweepOffline()
@@ -85,7 +113,31 @@ func ListenAndServe(addr string, opts Options) error {
 	if err != nil {
 		return err
 	}
-	return http.ListenAndServe(addr, s)
+	defer s.Close()
+	if err := s.initPKI(); err != nil {
+		return err
+	}
+	srv := &http.Server{
+		Addr:      addr,
+		Handler:   s,
+		TLSConfig: s.bundle.TLSConfig(s.verifyPeer),
+	}
+	return srv.ListenAndServeTLS("", "")
+}
+
+func (s *Server) initPKI() error {
+	dir := filepath.Join(s.opts.DataDir, "pki")
+	b, err := pki.Ensure(dir, s.certLifetime)
+	if err != nil {
+		return err
+	}
+	rev, err := pki.OpenRevocation(dir)
+	if err != nil {
+		return err
+	}
+	s.bundle = b
+	s.revoke = rev
+	return nil
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -97,6 +149,9 @@ func (s *Server) Close() {
 	case <-s.stopSweep:
 	default:
 		close(s.stopSweep)
+	}
+	if s.audit != nil {
+		s.audit.Close()
 	}
 }
 
@@ -126,6 +181,18 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /", s.handleDashboard)
 	s.mux.HandleFunc("GET /v1/cluster", s.handleCluster)
 	s.mux.HandleFunc("GET /v1/nodes", s.handleListNodes)
+	s.mux.HandleFunc("POST /v1/nodes/enroll", s.handleEnroll)
+	s.mux.HandleFunc("POST /v1/nodes/renew", s.handleRenew)
+	s.mux.HandleFunc("POST /v1/nodes/revoke", func(w http.ResponseWriter, r *http.Request) {
+		s.handleAdminIdentity(w, r, IdentityRevoked)
+	})
+	s.mux.HandleFunc("POST /v1/nodes/suspend", func(w http.ResponseWriter, r *http.Request) {
+		s.handleAdminIdentity(w, r, IdentitySuspended)
+	})
+	s.mux.HandleFunc("POST /v1/nodes/resume", func(w http.ResponseWriter, r *http.Request) {
+		s.handleAdminIdentity(w, r, IdentityActive)
+	})
+	s.mux.HandleFunc("GET /v1/pki/ca", s.handleCA)
 	s.mux.HandleFunc("POST /v1/nodes/join", s.handleJoin)
 	s.mux.HandleFunc("POST /v1/nodes/heartbeat", s.handleHeartbeat)
 	s.mux.HandleFunc("POST /v1/nodes/drain", s.handleDrain)
@@ -161,17 +228,25 @@ func (s *Server) handleWellKnown(w http.ResponseWriter, r *http.Request) {
 		"path":    "/v1",
 		"openai":  !s.opts.DisableOpenAICompat,
 		"auth":    s.opts.Token != "",
+		"tls":     true,
+		"enroll":  "/v1/nodes/enroll",
 	})
 }
 
 func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
-	if !s.authorized(w, r) {
+	nodeID, ok := s.requireNodeCert(w, r, false)
+	if !ok {
 		return
 	}
 	req, ok := readJoinRequest(w, r)
 	if !ok {
 		return
 	}
+	if req.NodeID != "" && req.NodeID != nodeID {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "node_id does not match certificate"})
+		return
+	}
+	req.NodeID = nodeID
 	n := Node{
 		Inventory:     req.Inventory,
 		AgentVersion:  req.AgentVersion,
@@ -180,6 +255,7 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 		Runtimes:      req.Runtimes,
 		ModelRuntimes: req.ModelRuntimes,
 		Models:        req.Models,
+		Identity:      IdentityActive,
 	}
 	hostRes := req.HostResources
 	if hostRes.CPUCores == 0 {
@@ -194,19 +270,27 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	n = s.store.Upsert(n)
+	s.audit.Log("NODE_CONNECTED", n.NodeID, n.CertFingerprint, clientIP(r), "")
 	s.jobs.FailRunningExcept(n.NodeID, req.CurrentJobID, "worker restarted")
 	s.tryScheduleQueued()
 	writeJSON(w, http.StatusOK, n)
 }
 
 func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
-	if !s.authorized(w, r) {
+	nodeID, ok := s.requireNodeCert(w, r, true)
+	if !ok {
 		return
 	}
 	req, ok := readJoinRequest(w, r)
 	if !ok {
 		return
 	}
+	if req.NodeID != "" && req.NodeID != nodeID {
+		s.audit.Log("HEARTBEAT_REJECTED", nodeID, "", clientIP(r), "node_id mismatch")
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "node_id does not match certificate"})
+		return
+	}
+	req.NodeID = nodeID
 	n := Node{
 		Inventory:     req.Inventory,
 		AgentVersion:  req.AgentVersion,
@@ -227,6 +311,9 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "node not registered; call /v1/nodes/join first"})
 		return
 	}
+	if out.Identity == IdentityCertified {
+		out, _ = s.store.SetIdentity(out.NodeID, IdentityActive)
+	}
 	// Idle heartbeats (empty CurrentJobID) must not fail pending jobs —
 	// those are assigned and waiting for the next claim tick.
 	s.jobs.FailRunningExcept(out.NodeID, req.CurrentJobID, "worker is no longer running this job")
@@ -237,11 +324,16 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request) {
-	if !s.authorized(w, r) {
+	nodeID, ok := s.requireNodeCert(w, r, true)
+	if !ok {
 		return
 	}
 	id, ok := readNodeID(w, r)
 	if !ok {
+		return
+	}
+	if id != nodeID {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "node_id does not match certificate"})
 		return
 	}
 	n, found := s.store.SetDrain(id)
@@ -253,11 +345,16 @@ func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLeave(w http.ResponseWriter, r *http.Request) {
-	if !s.authorized(w, r) {
+	nodeID, ok := s.requireNodeCert(w, r, true)
+	if !ok {
 		return
 	}
 	id, ok := readNodeID(w, r)
 	if !ok {
+		return
+	}
+	if id != nodeID {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "node_id does not match certificate"})
 		return
 	}
 	n, found := s.store.Get(id)
@@ -446,7 +543,8 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
-	if !s.authorized(w, r) {
+	certID, ok := s.requireNodeCert(w, r, false)
+	if !ok {
 		return
 	}
 	defer r.Body.Close()
@@ -462,13 +560,17 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "node_id is required"})
 		return
 	}
+	if req.NodeID != certID {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "node_id does not match certificate"})
+		return
+	}
 	node, ok := s.store.Get(req.NodeID)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "node not registered"})
 		return
 	}
-	if node.Status != StatusReady {
-		// DRAINING / BUSY / OFFLINE / JOINED cannot take new work.
+	if node.Status != StatusReady || node.Identity == IdentitySuspended || node.Identity == IdentityRevoked {
+		// DRAINING / BUSY / OFFLINE / JOINED / non-ACTIVE cannot take new work.
 		writeJSON(w, http.StatusNoContent, nil)
 		return
 	}
@@ -482,7 +584,8 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleJobResult(w http.ResponseWriter, r *http.Request) {
-	if !s.authorized(w, r) {
+	certID, ok := s.requireNodeCert(w, r, true)
+	if !ok {
 		return
 	}
 	defer r.Body.Close()
@@ -510,6 +613,10 @@ func (s *Server) handleJobResult(w http.ResponseWriter, r *http.Request) {
 	nodeID := req.NodeID
 	if nodeID == "" {
 		nodeID = j.NodeID
+	}
+	if nodeID != "" && nodeID != certID {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "node_id does not match certificate"})
+		return
 	}
 	if nodeID != "" {
 		s.store.SetStatus(nodeID, StatusReady, "")
@@ -759,6 +866,22 @@ type installData struct {
 
 // --- HTTP client helpers (used by CLI and node agent) ---
 
+func Enroll(ctx context.Context, serverURL, token, nodeID, csrPEM string) (enrollResponse, error) {
+	var out enrollResponse
+	err := postJSONInto(ctx, serverURL, "", "/v1/nodes/enroll", enrollRequest{
+		Token:  token,
+		CSR:    csrPEM,
+		NodeID: nodeID,
+	}, &out)
+	return out, err
+}
+
+func RenewCert(ctx context.Context, serverURL, csrPEM string) (enrollResponse, error) {
+	var out enrollResponse
+	err := postJSONInto(ctx, serverURL, "", "/v1/nodes/renew", map[string]string{"csr": csrPEM}, &out)
+	return out, err
+}
+
 func Join(ctx context.Context, serverURL, token string, inv gpu.Inventory) (map[string]any, error) {
 	return postJSON(ctx, serverURL, token, "/v1/nodes/join", inv)
 }
@@ -902,7 +1025,7 @@ func GetJob(ctx context.Context, serverURL, token, id string) (Job, error) {
 }
 
 func ClaimJob(ctx context.Context, serverURL, token, nodeID string) (Job, bool, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(serverURL, "/")+"/v1/jobs/claim",
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(HTTPSURL(serverURL), "/")+"/v1/jobs/claim",
 		bytes.NewReader(mustJSON(map[string]string{"node_id": nodeID})))
 	if err != nil {
 		return Job{}, false, err
@@ -911,7 +1034,7 @@ func ClaimJob(ctx context.Context, serverURL, token, nodeID string) (Job, bool, 
 	if token != "" {
 		req.Header.Set("X-Houdry-Token", token)
 	}
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	resp, err := clientFor(ctx, serverURL).Do(req)
 	if err != nil {
 		return Job{}, false, err
 	}
@@ -953,7 +1076,7 @@ func postJSON(ctx context.Context, serverURL, token, path string, payload any) (
 }
 
 func postJSONInto(ctx context.Context, serverURL, token, path string, payload, dest any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(serverURL, "/")+path, bytes.NewReader(mustJSON(payload)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(HTTPSURL(serverURL), "/")+path, bytes.NewReader(mustJSON(payload)))
 	if err != nil {
 		return err
 	}
@@ -961,7 +1084,7 @@ func postJSONInto(ctx context.Context, serverURL, token, path string, payload, d
 	if token != "" {
 		req.Header.Set("X-Houdry-Token", token)
 	}
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	resp, err := clientFor(ctx, serverURL).Do(req)
 	if err != nil {
 		return err
 	}
@@ -977,14 +1100,14 @@ func postJSONInto(ctx context.Context, serverURL, token, path string, payload, d
 }
 
 func getJSON(ctx context.Context, serverURL, token, path string, dest any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(serverURL, "/")+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(HTTPSURL(serverURL), "/")+path, nil)
 	if err != nil {
 		return err
 	}
 	if token != "" {
 		req.Header.Set("X-Houdry-Token", token)
 	}
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	resp, err := clientFor(ctx, serverURL).Do(req)
 	if err != nil {
 		return err
 	}

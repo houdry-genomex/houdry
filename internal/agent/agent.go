@@ -42,6 +42,11 @@ func Run(ctx context.Context, opts Options) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	ctx, opts, err := dial(ctx, opts)
+	if err != nil {
+		return err
+	}
+
 	req := buildJoinRequest(ctx, opts.NodeID, server.StatusReady, "")
 	n, err := server.JoinAgent(ctx, opts.ServerURL, opts.Token, req)
 	if err != nil {
@@ -149,6 +154,7 @@ func Run(ctx context.Context, opts Options) error {
 			fmt.Fprintf(os.Stderr, "heartbeat: %v\n", err)
 			return true
 		}
+		maybeRenew(ctx, opts)
 		// Honor remote drain (e.g. houdry node drain from another terminal).
 		if out.Status == server.StatusDraining {
 			mu.Lock()
