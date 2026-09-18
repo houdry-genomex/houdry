@@ -11,7 +11,7 @@ $HOUDRY_HOME/server/pki/server.key    # 0600
 $HOUDRY_HOME/server/pki/server.crt    # 0644
 ```
 
-All keys are Ed25519 (`crypto/ed25519`). The Root CA signs the server certificate and every node certificate. Files are reused across restarts. The server certificate is reissued when its SANs no longer cover localhost, `127.0.0.1`, `::1`, the hostname, and current non-loopback IPs — so LAN Agent URLs such as `https://10.x:18080` verify.
+All keys are ECDSA P-256 (`crypto/ecdsa`). Ed25519 from 0.6.8 is rotated on the next `houdry serve` / `gpu register` so Windows, Electron, and Python TLS clients can handshake. The Root CA signs the server certificate and every node certificate. Files are reused across restarts. The server certificate is reissued when its SANs no longer cover localhost, `127.0.0.1`, `::1`, the hostname, and current non-loopback IPs — so LAN Agent URLs such as `https://10.x:18080` verify.
 
 `NotBefore` is set five minutes in the past so a mildly skewed clock still accepts a fresh cert.
 

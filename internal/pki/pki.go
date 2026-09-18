@@ -2,7 +2,9 @@
 package pki
 
 import (
-	"crypto/ed25519"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -19,28 +21,30 @@ import (
 )
 
 const (
-	caKeyName     = "root_ca.key"
-	caCertName    = "root_ca.crt"
-	serverKeyName = "server.key"
+	caKeyName      = "root_ca.key"
+	caCertName     = "root_ca.crt"
+	serverKeyName  = "server.key"
 	serverCertName = "server.crt"
 
-	caValidity     = 10 * 365 * 24 * time.Hour
-	clockSkew      = 5 * time.Minute
-	keyPerm        = 0o600
-	certPerm       = 0o644
+	caValidity = 10 * 365 * 24 * time.Hour
+	clockSkew  = 5 * time.Minute
+	keyPerm    = 0o600
+	certPerm   = 0o644
 )
 
 // Bundle is the control-plane PKI material loaded from disk.
 type Bundle struct {
 	Dir        string
 	CACert     *x509.Certificate
-	CAKey      ed25519.PrivateKey
+	CAKey      crypto.Signer
 	ServerCert *x509.Certificate
-	ServerKey  ed25519.PrivateKey
+	ServerKey  crypto.Signer
 }
 
 // Ensure loads an existing PKI directory or creates Root CA + server cert.
 // Server cert is reissued when SANs no longer cover the current host.
+// Ed25519 material from 0.6.8 is rotated to ECDSA P-256 so Windows / Electron
+// / Python TLS clients can handshake (they omit ed25519 in signature_algorithms).
 func Ensure(dir string, serverLifetime time.Duration) (*Bundle, error) {
 	if serverLifetime <= 0 {
 		serverLifetime = 30 * 24 * time.Hour
@@ -62,6 +66,15 @@ func (b *Bundle) CACertPEM() []byte { return encodeCertPEM(b.CACert.Raw) }
 func (b *Bundle) CAKeyPath() string { return filepath.Join(b.Dir, caKeyName) }
 func (b *Bundle) CACertPath() string { return filepath.Join(b.Dir, caCertName) }
 
+func generateP256() (*ecdsa.PrivateKey, error) {
+	return ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+}
+
+func isP256(s crypto.Signer) bool {
+	k, ok := s.(*ecdsa.PrivateKey)
+	return ok && k.Curve == elliptic.P256()
+}
+
 func (b *Bundle) loadOrCreateCA() error {
 	certPath := filepath.Join(b.Dir, caCertName)
 	keyPath := filepath.Join(b.Dir, caKeyName)
@@ -74,10 +87,12 @@ func (b *Bundle) loadOrCreateCA() error {
 		if err != nil {
 			return fmt.Errorf("load CA key: %w", err)
 		}
-		b.CACert, b.CAKey = cert, key
-		return nil
+		if isP256(key) && cert.PublicKeyAlgorithm == x509.ECDSA {
+			b.CACert, b.CAKey = cert, key
+			return nil
+		}
 	}
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	priv, err := generateP256()
 	if err != nil {
 		return err
 	}
@@ -97,7 +112,7 @@ func (b *Bundle) loadOrCreateCA() error {
 		MaxPathLen:            1,
 		MaxPathLenZero:        false,
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
 	if err != nil {
 		return err
 	}
@@ -128,17 +143,17 @@ func (b *Bundle) loadOrCreateServer(lifetime time.Duration) error {
 		if err != nil {
 			return fmt.Errorf("load server key: %w", err)
 		}
-		if sansCover(cert, sans) && time.Until(cert.NotAfter) > time.Hour {
+		if isP256(key) && cert.PublicKeyAlgorithm == x509.ECDSA && sansCover(cert, sans) && time.Until(cert.NotAfter) > time.Hour {
 			b.ServerCert, b.ServerKey = cert, key
 			return nil
 		}
 	}
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	priv, err := generateP256()
 	if err != nil {
 		return err
 	}
 	cert, err := b.issue(IssueOpts{
-		Pub:        pub,
+		Pub:        &priv.PublicKey,
 		CN:         "houdry-server",
 		DNS:        sans.DNS,
 		IPs:        sans.IPs,
@@ -160,7 +175,7 @@ func (b *Bundle) loadOrCreateServer(lifetime time.Duration) error {
 
 // IssueOpts describes a leaf certificate signed by the Root CA.
 type IssueOpts struct {
-	Pub        ed25519.PublicKey
+	Pub        crypto.PublicKey
 	CN         string
 	DNS        []string
 	IPs        []net.IP
@@ -222,9 +237,9 @@ func (b *Bundle) SignCSR(csrPEM []byte, nodeID string, lifetime time.Duration) (
 	if err := csr.CheckSignature(); err != nil {
 		return nil, fmt.Errorf("invalid CSR signature: %w", err)
 	}
-	pub, ok := csr.PublicKey.(ed25519.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("CSR public key must be Ed25519")
+	pub, ok := csr.PublicKey.(*ecdsa.PublicKey)
+	if !ok || pub.Curve != elliptic.P256() {
+		return nil, fmt.Errorf("CSR public key must be ECDSA P-256")
 	}
 	if csr.Subject.CommonName != nodeID {
 		return nil, fmt.Errorf("CSR CN %q does not match node_id %q", csr.Subject.CommonName, nodeID)
@@ -250,11 +265,11 @@ func (b *Bundle) TLSConfig(verify func(raw [][]byte, verified [][]*x509.Certific
 	pool := x509.NewCertPool()
 	pool.AddCert(b.CACert)
 	cfg := &tls.Config{
-		MinVersion:         tls.VersionTLS13,
-		Certificates:       []tls.Certificate{cert},
-		ClientCAs:          pool,
-		ClientAuth:         tls.VerifyClientCertIfGiven,
-		NextProtos:         []string{"h2", "http/1.1"},
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{cert},
+		ClientCAs:    pool,
+		ClientAuth:   tls.VerifyClientCertIfGiven,
+		NextProtos:   []string{"h2", "http/1.1"},
 	}
 	if verify != nil {
 		cfg.VerifyPeerCertificate = verify
@@ -317,11 +332,15 @@ func EncodeCertPEM(cert *x509.Certificate) []byte {
 	return encodeCertPEM(cert.Raw)
 }
 
+func EncodeKeyPEM(key any) []byte {
+	return encodeKeyPEM(key)
+}
+
 func encodeCertPEM(der []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
-func encodeKeyPEM(key ed25519.PrivateKey) []byte {
+func encodeKeyPEM(key any) []byte {
 	der, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		panic(err)
@@ -337,7 +356,7 @@ func loadCert(path string) (*x509.Certificate, error) {
 	return ParseCertPEM(b)
 }
 
-func loadKey(path string) (ed25519.PrivateKey, error) {
+func loadKey(path string) (crypto.Signer, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -350,11 +369,11 @@ func loadKey(path string) (ed25519.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	ek, ok := k.(ed25519.PrivateKey)
+	s, ok := k.(crypto.Signer)
 	if !ok {
-		return nil, fmt.Errorf("key is not Ed25519")
+		return nil, fmt.Errorf("key is not a signer")
 	}
-	return ek, nil
+	return s, nil
 }
 
 func randomSerial() (*big.Int, error) {

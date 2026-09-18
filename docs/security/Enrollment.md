@@ -11,7 +11,7 @@ Tokens are stored hashed in `$HOUDRY_HOME/server/enrollment.json`. Plaintext exi
 
 `houdry node join` / `houdry gpu register` on an empty `~/.houdry/node/` directory:
 
-1. Generate Ed25519 `private.key` / `public.pem` / `node.csr` (CN = node id, DNS SAN = hostname).
+1. Generate ECDSA P-256 `private.key` / `public.pem` / `node.csr` (CN = node id, DNS SAN = hostname).
 2. `POST /v1/nodes/enroll` over HTTPS with `{token, csr, node_id}` and no client cert.
 3. Persist `node.crt` + `ca.crt`.
 4. Heartbeat, claim, and result use mTLS.

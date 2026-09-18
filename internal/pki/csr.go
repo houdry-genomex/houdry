@@ -1,7 +1,7 @@
 package pki
 
 import (
-	"crypto/ed25519"
+	"crypto"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -23,8 +23,8 @@ const (
 // NodeMaterial is the per-node identity stored under ~/.houdry/node/.
 type NodeMaterial struct {
 	Dir     string
-	Key     ed25519.PrivateKey
-	Pub     ed25519.PublicKey
+	Key     crypto.Signer
+	Pub     crypto.PublicKey
 	CSRPEM  []byte
 	CertPEM []byte
 	CAPEM   []byte
@@ -43,7 +43,7 @@ func LoadNode(dir string) (*NodeMaterial, error) {
 	m := &NodeMaterial{
 		Dir: dir,
 		Key: key,
-		Pub: key.Public().(ed25519.PublicKey),
+		Pub: key.Public(),
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, nodeCSRName)); err == nil {
 		m.CSRPEM = b
@@ -57,7 +57,8 @@ func LoadNode(dir string) (*NodeMaterial, error) {
 	return m, nil
 }
 
-// EnsureNode generates Ed25519 keys + CSR when they do not exist.
+// EnsureNode generates ECDSA P-256 keys + CSR when they do not exist.
+// Ed25519 keys from 0.6.8 are rotated so they can enroll against a P-256 CA.
 func EnsureNode(dir, nodeID, hostname string) (*NodeMaterial, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -68,19 +69,21 @@ func EnsureNode(dir, nodeID, hostname string) (*NodeMaterial, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(m.CSRPEM) == 0 {
-			csr, err := CreateCSR(m.Key, nodeID, hostname)
-			if err != nil {
-				return nil, err
+		if isP256(m.Key) {
+			if len(m.CSRPEM) == 0 {
+				csr, err := CreateCSR(m.Key, nodeID, hostname)
+				if err != nil {
+					return nil, err
+				}
+				m.CSRPEM = csr
+				if err := os.WriteFile(filepath.Join(dir, nodeCSRName), csr, certPerm); err != nil {
+					return nil, err
+				}
 			}
-			m.CSRPEM = csr
-			if err := os.WriteFile(filepath.Join(dir, nodeCSRName), csr, certPerm); err != nil {
-				return nil, err
-			}
+			return m, nil
 		}
-		return m, nil
 	}
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	priv, err := generateP256()
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +91,7 @@ func EnsureNode(dir, nodeID, hostname string) (*NodeMaterial, error) {
 	if err != nil {
 		return nil, err
 	}
-	pubPEM, err := marshalPublicPEM(pub)
+	pubPEM, err := marshalPublicPEM(&priv.PublicKey)
 	if err != nil {
 		return nil, err
 	}
@@ -101,10 +104,10 @@ func EnsureNode(dir, nodeID, hostname string) (*NodeMaterial, error) {
 	if err := os.WriteFile(filepath.Join(dir, nodeCSRName), csr, certPerm); err != nil {
 		return nil, err
 	}
-	return &NodeMaterial{Dir: dir, Key: priv, Pub: pub, CSRPEM: csr}, nil
+	return &NodeMaterial{Dir: dir, Key: priv, Pub: &priv.PublicKey, CSRPEM: csr}, nil
 }
 
-func CreateCSR(key ed25519.PrivateKey, nodeID, hostname string) ([]byte, error) {
+func CreateCSR(key crypto.Signer, nodeID, hostname string) ([]byte, error) {
 	if nodeID == "" {
 		return nil, fmt.Errorf("node ID is required in CSR")
 	}
@@ -149,7 +152,7 @@ func (m *NodeMaterial) Certificate() (*x509.Certificate, error) {
 	return ParseCertPEM(m.CertPEM)
 }
 
-func marshalPublicPEM(pub ed25519.PublicKey) ([]byte, error) {
+func marshalPublicPEM(pub crypto.PublicKey) ([]byte, error) {
 	der, err := x509.MarshalPKIXPublicKey(pub)
 	if err != nil {
 		return nil, err

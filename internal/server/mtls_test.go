@@ -1,8 +1,6 @@
 package server
 
 import (
-	"crypto/ed25519"
-	"crypto/tls"
 	"net/http"
 	"testing"
 	"time"
@@ -60,19 +58,15 @@ func TestUnknownCARejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, priv, err := ed25519.GenerateKey(nil)
+	m, err := pki.EnsureNode(t.TempDir(), "evil", "host")
 	if err != nil {
 		t.Fatal(err)
 	}
-	csr, err := pki.CreateCSR(priv, "evil", "host")
+	cert, err := other.SignCSR(m.CSRPEM, "evil", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert, err := other.SignCSR(csr, "evil", time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := pki.ClientTLS(other.CACertPEM(), pki.EncodeCertPEM(cert), encodeKeyForTest(priv))
+	cfg, err := pki.ClientTLS(other.CACertPEM(), pki.EncodeCertPEM(cert), m.KeyPEM())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,11 +76,6 @@ func TestUnknownCARejected(t *testing.T) {
 	if _, err := Join(ctx, env.URL, "", testInv("evil")); err == nil {
 		t.Fatal("expected unknown CA rejection")
 	}
-}
-
-func encodeKeyForTest(key ed25519.PrivateKey) []byte {
-	m := &pki.NodeMaterial{Key: key}
-	return m.KeyPEM()
 }
 
 func TestRevokedCertRejected(t *testing.T) {
@@ -139,20 +128,6 @@ func TestExpiredNodeCertRejected(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	other, err := pki.Ensure(t.TempDir(), time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, priv, _ := ed25519.GenerateKey(nil)
-	csr, _ := pki.CreateCSR(priv, "n1", "host")
-	cert, err := other.SignCSR(csr, "n1", time.Millisecond)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = cert
-	_ = tls.VersionTLS13
-	time.Sleep(5 * time.Millisecond)
-	// Handshake against our plane with a cert from another CA already covered.
 	// Expired cert signed by the plane CA:
 	env.S.certLifetime = time.Millisecond
 	m, err := pki.EnsureNode(t.TempDir(), "exp", "host")
