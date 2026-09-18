@@ -8,7 +8,8 @@ import (
 
 func TestDirRespectsHoudryHome(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("HOODRY_HOME", dir)
+	t.Setenv("HOUDRY_HOME", dir)
+	t.Setenv("HOODRY_HOME", "")
 	if Dir() != dir {
 		t.Fatalf("got %s", Dir())
 	}

@@ -20,7 +20,9 @@ type tlsEnv struct {
 
 func startTLSServer(t *testing.T, opts Options) *tlsEnv {
 	t.Helper()
-	t.Setenv("HOUDRY_HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOUDRY_HOME", home)
+	t.Setenv("HOODRY_HOME", home)
 	if opts.DataDir == "" {
 		opts.DataDir = t.TempDir()
 	}

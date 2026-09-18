@@ -234,7 +234,7 @@ func (s *Server) handleWellKnown(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
-	nodeID, ok := s.requireNodeCert(w, r, false)
+	nodeID, ok := s.requireJoinCert(w, r)
 	if !ok {
 		return
 	}

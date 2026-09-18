@@ -1,7 +1,11 @@
 package server
 
 import (
+	"context"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,4 +159,116 @@ func TestExpiredNodeCertRejected(t *testing.T) {
 		t.Fatal("expected expired cert rejection")
 	}
 	_ = ctx
+}
+
+func TestLoadOrFetchCAIgnoresStaleLocalServeCA(t *testing.T) {
+	env := startTLSServer(t, Options{})
+	stale := filepath.Join(houdryHome(), "server", "pki")
+	if err := os.MkdirAll(stale, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "root_ca.crt"), []byte("-----BEGIN CERTIFICATE-----\nnot-the-plane\n-----END CERTIFICATE-----\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nodeDir := filepath.Join(houdryHome(), "node")
+	if err := os.MkdirAll(nodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nodeDir, "ca.crt"), []byte("-----BEGIN CERTIFICATE-----\nstale-pin\n-----END CERTIFICATE-----\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := loadOrFetchCA(context.Background(), env.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := env.S.bundle.CACertPEM()
+	if string(got) != string(want) {
+		t.Fatalf("used stale local CA instead of the live control plane")
+	}
+}
+
+func TestIsLoopbackURL(t *testing.T) {
+	if !isLoopbackURL("https://127.0.0.1:18080") || !isLoopbackURL("http://localhost:18080/v1") {
+		t.Fatal("expected loopback")
+	}
+	if isLoopbackURL("https://192.168.29.48:18080") {
+		t.Fatal("LAN IP must not use this machine's serve CA")
+	}
+}
+
+func TestDetachedClientKeepsMTLSAfterCancel(t *testing.T) {
+	c := &http.Client{Timeout: time.Second}
+	parent, cancel := context.WithCancel(WithHTTPClient(context.Background(), c))
+	cancel()
+	detached := DetachedClient(parent)
+	if detached.Err() != nil {
+		t.Fatal("detached context must not be cancelled")
+	}
+	if clientFrom(detached) != c {
+		t.Fatal("detached context dropped the mTLS HTTP client")
+	}
+}
+
+func TestReportJobResultWithoutCertRejected(t *testing.T) {
+	env := startTLSServer(t, Options{})
+	_, err := ReportJobResult(env.PublicCtx(), env.URL, "", "job-1", "n1", true, nil, "")
+	if err == nil || !strings.Contains(err.Error(), "client certificate required") {
+		t.Fatalf("expected client certificate required, got %v", err)
+	}
+}
+
+func TestJoinAfterLeaveReusesCert(t *testing.T) {
+	env := startTLSServer(t, Options{})
+	ctx := env.Enroll("n1")
+	if _, err := JoinAgent(ctx, env.URL, "", JoinRequest{
+		Inventory: testInv("n1"), AgentVersion: "t", Status: StatusReady,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := LeaveNode(ctx, env.URL, "", "n1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := JoinAgent(ctx, env.URL, "", JoinRequest{
+		Inventory: testInv("n1"), AgentVersion: "t", Status: StatusReady,
+	}); err != nil {
+		t.Fatalf("rejoin after leave: %v", err)
+	}
+}
+
+func TestDialNodeJoinTrustsFetchedCA(t *testing.T) {
+	env := startTLSServer(t, Options{})
+	iss, err := env.S.enroll.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, url, err := DialNode(context.Background(), env.URL, iss.Token, "gpu-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Join(ctx, url, "", testInv("gpu-1")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDialNodeIgnoresStaleNodeCAFile(t *testing.T) {
+	env := startTLSServer(t, Options{})
+	iss, err := env.S.enroll.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := DialNode(context.Background(), env.URL, iss.Token, "gpu-1"); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(houdryHome(), "node", "ca.crt")
+	if err := os.WriteFile(stale, []byte("-----BEGIN CERTIFICATE-----\nstale-pin\n-----END CERTIFICATE-----\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, url, err := DialNode(context.Background(), env.URL, "", "gpu-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Join(ctx, url, "", testInv("gpu-1")); err != nil {
+		t.Fatal(err)
+	}
 }

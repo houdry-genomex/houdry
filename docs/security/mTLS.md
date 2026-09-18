@@ -2,7 +2,9 @@
 
 One HTTPS listener (`--listen`, default `0.0.0.0:8080`; desktop `18080`). There is no HTTP fallback on that port.
 
-TLS 1.3. `ClientAuth: VerifyClientCertIfGiven`. Presented client certs must be signed by the Houdry Root CA, unexpired, not revoked, and match a registered node.
+TLS 1.3. The listener requests an optional client certificate (`RequestClientCert`) so GPU workers can do mTLS. A presented **Houdry-issued** cert must be unexpired and not revoked. Node APIs (join, heartbeat, claim, result) additionally require that cert to be signed by the Houdry Root CA and to match a node. OpenAI `/v1` does not require a client cert.
+
+Agent, browsers, and Windows may send a non-Houdry cert or none; that is not a node, so the handshake still completes and `/v1` works. Those clients cannot claim jobs or report results.
 
 ## No client cert (HTTPS only)
 

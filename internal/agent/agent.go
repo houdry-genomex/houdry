@@ -116,7 +116,7 @@ func Run(ctx context.Context, opts Options) error {
 			} else {
 				logf("Work finished  %s  %s", j.ID, resultSummary(j, result))
 			}
-			if _, err := server.ReportJobResult(context.Background(), opts.ServerURL, opts.Token, j.ID, opts.NodeID, ok, result, errMsg); err != nil {
+			if _, err := server.ReportJobResult(server.DetachedClient(ctx), opts.ServerURL, opts.Token, j.ID, opts.NodeID, ok, result, errMsg); err != nil {
 				fmt.Fprintf(os.Stderr, "report job %s: %v\n", j.ID, err)
 			}
 			mu.Lock()
@@ -182,7 +182,8 @@ func Run(ctx context.Context, opts Options) error {
 			mu.Lock()
 			draining = true
 			mu.Unlock()
-			if _, err := server.DrainNode(context.Background(), opts.ServerURL, opts.Token, opts.NodeID); err != nil {
+			doneCtx := server.DetachedClient(ctx)
+			if _, err := server.DrainNode(doneCtx, opts.ServerURL, opts.Token, opts.NodeID); err != nil {
 				if !isNotRegistered(err) {
 					fmt.Fprintf(os.Stderr, "drain: %v\n", err)
 				}
@@ -200,7 +201,7 @@ func Run(ctx context.Context, opts Options) error {
 				}
 				time.Sleep(opts.Interval)
 			}
-			if err := server.LeaveNode(context.Background(), opts.ServerURL, opts.Token, opts.NodeID); err != nil {
+			if err := server.LeaveNode(doneCtx, opts.ServerURL, opts.Token, opts.NodeID); err != nil {
 				if !isNotRegistered(err) {
 					fmt.Fprintf(os.Stderr, "leave: %v\n", err)
 				}

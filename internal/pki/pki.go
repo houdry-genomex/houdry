@@ -268,8 +268,15 @@ func (b *Bundle) TLSConfig(verify func(raw [][]byte, verified [][]*x509.Certific
 		MinVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{cert},
 		ClientCAs:    pool,
-		ClientAuth:   tls.VerifyClientCertIfGiven,
-		NextProtos:   []string{"h2", "http/1.1"},
+		// Request, don't verify, at the handshake. Agent / Electron / Windows
+		// Schannel often auto-send a store cert when we advertise optional
+		// client-auth; VerifyClientCertIfGiven then fails those probes with
+		// "bad record MAC" / "bad certificate" even though /v1 does not need
+		// a node cert. Node APIs still check the cert in requireNodeCert.
+		ClientAuth: tls.RequestClientCert,
+		// HTTP/1.1 only: h2 + CertificateRequest trips Schannel/Electron on
+		// LAN private-CA URLs (bursts of tls: bad record MAC in serve logs).
+		NextProtos: []string{"http/1.1"},
 	}
 	if verify != nil {
 		cfg.VerifyPeerCertificate = verify

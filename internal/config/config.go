@@ -19,6 +19,9 @@ type Config struct {
 }
 
 func Dir() string {
+	if v := os.Getenv("HOUDRY_HOME"); v != "" {
+		return v
+	}
 	if v := os.Getenv("HOODRY_HOME"); v != "" {
 		return v
 	}
