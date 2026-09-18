@@ -2,9 +2,11 @@
 
 One HTTPS listener (`--listen`, default `0.0.0.0:8080`; desktop `18080`). There is no HTTP fallback on that port.
 
-TLS 1.3. The listener requests an optional client certificate (`RequestClientCert`) so GPU workers can do mTLS. A presented **Houdry-issued** cert must be unexpired and not revoked. Node APIs (join, heartbeat, claim, result) additionally require that cert to be signed by the Houdry Root CA and to match a node. OpenAI `/v1` does not require a client cert.
+TLS 1.3, HTTP/1.1 only (HTTP/2 is disabled on the listener). GPU workers advertise ALPN `houdry` and the listener then requests an optional client certificate. Agent / Electron / Chromium ClientHellos (GREASE) never see `CertificateRequest` — that combination is what logged `tls: bad record MAC` from the other laptop on every chat/refresh.
 
-Agent, browsers, and Windows may send a non-Houdry cert or none; that is not a node, so the handshake still completes and `/v1` works. Those clients cannot claim jobs or report results.
+A presented **Houdry-issued** cert must be unexpired and not revoked. Node APIs (join, heartbeat, claim, result) additionally require that cert to be signed by the Houdry Root CA and to match a node. OpenAI `/v1` does not require a client cert.
+
+Agent and browsers complete HTTPS without a client cert. Those clients cannot claim jobs or report results.
 
 ## No client cert (HTTPS only)
 

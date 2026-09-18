@@ -100,8 +100,8 @@ func (s *Server) verifyPeer(raw [][]byte, _ [][]*x509.Certificate) error {
 		return fmt.Errorf("pki not ready")
 	}
 	if err := cert.CheckSignatureFrom(s.bundle.CACert); err != nil {
-		// Agent/Electron/Windows may present a store cert because we request
-		// client certs for GPU workers. Ignore it here so /v1 still works.
+		// Ignore non-Houdry certs at the handshake. Node APIs still require a
+		// CA-signed cert in checkNodeCert; /v1 does not.
 		return nil
 	}
 	now := time.Now().UTC()

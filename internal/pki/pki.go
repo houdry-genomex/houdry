@@ -30,6 +30,13 @@ const (
 	clockSkew  = 5 * time.Minute
 	keyPerm    = 0o600
 	certPerm   = 0o644
+
+	// ALPNHoudry is advertised by GPU workers that present a node certificate.
+	// The control plane only sends CertificateRequest when it sees this (or a
+	// non-browser ClientHello). Chromium/Electron on Windows otherwise aborts
+	// TLS 1.3 + optional client-auth with "tls: bad record MAC".
+	ALPNHoudry = "houdry"
+	alpnHTTP11 = "http/1.1"
 )
 
 // Bundle is the control-plane PKI material loaded from disk.
@@ -264,24 +271,50 @@ func (b *Bundle) TLSConfig(verify func(raw [][]byte, verified [][]*x509.Certific
 	}
 	pool := x509.NewCertPool()
 	pool.AddCert(b.CACert)
-	cfg := &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		Certificates: []tls.Certificate{cert},
-		ClientCAs:    pool,
-		// Request, don't verify, at the handshake. Agent / Electron / Windows
-		// Schannel often auto-send a store cert when we advertise optional
-		// client-auth; VerifyClientCertIfGiven then fails those probes with
-		// "bad record MAC" / "bad certificate" even though /v1 does not need
-		// a node cert. Node APIs still check the cert in requireNodeCert.
-		ClientAuth: tls.RequestClientCert,
-		// HTTP/1.1 only: h2 + CertificateRequest trips Schannel/Electron on
-		// LAN private-CA URLs (bursts of tls: bad record MAC in serve logs).
-		NextProtos: []string{"http/1.1"},
+	makeCfg := func(requestNodeCert bool) *tls.Config {
+		cfg := &tls.Config{
+			MinVersion:   tls.VersionTLS13,
+			Certificates: []tls.Certificate{cert},
+			ClientCAs:    pool,
+			// Agent / Electron / Chromium must not see CertificateRequest.
+			// GPU workers still get an optional client cert (checked in
+			// requireNodeCert). HTTP/2 is disabled on the http.Server.
+			ClientAuth: tls.NoClientCert,
+			NextProtos: []string{alpnHTTP11},
+		}
+		if requestNodeCert {
+			cfg.ClientAuth = tls.RequestClientCert
+			if verify != nil {
+				cfg.VerifyPeerCertificate = verify
+			}
+		}
+		return cfg
 	}
-	if verify != nil {
-		cfg.VerifyPeerCertificate = verify
+	cfg := makeCfg(false)
+	cfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+		return makeCfg(clientWantsNodeMTLS(hello)), nil
 	}
 	return cfg
+}
+
+func clientWantsNodeMTLS(hello *tls.ClientHelloInfo) bool {
+	if hello == nil {
+		return true
+	}
+	for _, proto := range hello.SupportedProtos {
+		if proto == ALPNHoudry {
+			return true
+		}
+	}
+	// Chromium/Electron always GREASE the ClientHello (RFC 8701). Go GPU
+	// workers and Python httpx do not — keep requesting a cert for them so
+	// 0.6.11 `gpu register` still presents its node certificate.
+	for _, id := range hello.CipherSuites {
+		if id&0x0f0f == 0x0a0a {
+			return false
+		}
+	}
+	return true
 }
 
 // ClientTLSConfig builds an mTLS client that trusts this CA and presents certPEM/keyPEM.
@@ -298,6 +331,7 @@ func ClientTLS(caPEM, certPEM, keyPEM []byte) (*tls.Config, error) {
 	cfg := &tls.Config{
 		MinVersion: tls.VersionTLS13,
 		RootCAs:    pool,
+		NextProtos: []string{alpnHTTP11},
 	}
 	if len(certPEM) > 0 && len(keyPEM) > 0 {
 		cert, err := tls.X509KeyPair(certPEM, keyPEM)
@@ -305,6 +339,7 @@ func ClientTLS(caPEM, certPEM, keyPEM []byte) (*tls.Config, error) {
 			return nil, err
 		}
 		cfg.Certificates = []tls.Certificate{cert}
+		cfg.NextProtos = []string{ALPNHoudry, alpnHTTP11}
 	}
 	return cfg, nil
 }

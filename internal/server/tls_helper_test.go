@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -36,6 +37,7 @@ func startTLSServer(t *testing.T, opts Options) *tlsEnv {
 	}
 	ts := httptest.NewUnstartedServer(s)
 	ts.TLS = s.bundle.TLSConfig(s.verifyPeer)
+	ts.Config.TLSNextProto = map[string]func(*http.Server, *tls.Conn, http.Handler){}
 	ts.StartTLS()
 	t.Cleanup(ts.Close)
 	return &tlsEnv{t: t, S: s, TS: ts, URL: ts.URL, clients: map[string]context.Context{}}

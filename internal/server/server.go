@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -117,12 +118,21 @@ func ListenAndServe(addr string, opts Options) error {
 	if err := s.initPKI(); err != nil {
 		return err
 	}
-	srv := &http.Server{
-		Addr:      addr,
-		Handler:   s,
-		TLSConfig: s.bundle.TLSConfig(s.verifyPeer),
-	}
+	srv := http1TLSServer(addr, s, s.bundle.TLSConfig(s.verifyPeer))
 	return srv.ListenAndServeTLS("", "")
+}
+
+// http1TLSServer disables HTTP/2. ListenAndServeTLS otherwise calls
+// http2.ConfigureServer, which re-adds "h2" to ALPN even when TLSConfig
+// NextProtos is http/1.1-only. h2 + CertificateRequest is what produces
+// bursts of "tls: bad record MAC" from Windows Agent/Electron.
+func http1TLSServer(addr string, handler http.Handler, tlsCfg *tls.Config) *http.Server {
+	return &http.Server{
+		Addr:         addr,
+		Handler:      handler,
+		TLSConfig:    tlsCfg,
+		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
+	}
 }
 
 func (s *Server) initPKI() error {

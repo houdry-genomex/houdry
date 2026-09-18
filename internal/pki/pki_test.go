@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
@@ -192,4 +193,82 @@ func publicKeysEqual(a, b crypto.PublicKey) bool {
 		return false
 	}
 	return bytes.Equal(da, db)
+}
+
+func TestTLSConfigSkipsClientCertForBrowserHello(t *testing.T) {
+	b, err := Ensure(t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := b.TLSConfig(nil)
+	if cfg.ClientAuth != tls.NoClientCert {
+		t.Fatalf("default ClientAuth=%v", cfg.ClientAuth)
+	}
+	if cfg.GetConfigForClient == nil {
+		t.Fatal("missing GetConfigForClient")
+	}
+
+	agent, err := cfg.GetConfigForClient(&tls.ClientHelloInfo{
+		SupportedProtos: []string{"h2", "http/1.1"},
+		CipherSuites:    []uint16{0x0a0a, 0x1301}, // GREASE + TLS_AES_128_GCM_SHA256
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.ClientAuth != tls.NoClientCert {
+		t.Fatalf("browser ClientAuth=%v", agent.ClientAuth)
+	}
+
+	gpu, err := cfg.GetConfigForClient(&tls.ClientHelloInfo{
+		SupportedProtos: []string{ALPNHoudry, "http/1.1"},
+		CipherSuites:    []uint16{0x1301},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gpu.ClientAuth != tls.RequestClientCert {
+		t.Fatalf("houdry ALPN ClientAuth=%v", gpu.ClientAuth)
+	}
+
+	legacy, err := cfg.GetConfigForClient(&tls.ClientHelloInfo{
+		SupportedProtos: []string{"h2", "http/1.1"},
+		CipherSuites:    []uint16{0x1301},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.ClientAuth != tls.RequestClientCert {
+		t.Fatalf("Go GPU without GREASE ClientAuth=%v", legacy.ClientAuth)
+	}
+}
+
+func TestClientTLSAdvertisesHoudryALPNWithNodeCert(t *testing.T) {
+	b, err := Ensure(t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mat, err := EnsureNode(t.TempDir(), "gpu-1", "box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := b.SignCSR(mat.CSRPEM, "gpu-1", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withCert, err := ClientTLS(b.CACertPEM(), EncodeCertPEM(cert), mat.KeyPEM())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withCert.NextProtos) == 0 || withCert.NextProtos[0] != ALPNHoudry {
+		t.Fatalf("node NextProtos=%v", withCert.NextProtos)
+	}
+	caOnly, err := ClientTLS(b.CACertPEM(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, proto := range caOnly.NextProtos {
+		if proto == ALPNHoudry {
+			t.Fatal("CA-only client must not advertise houdry ALPN")
+		}
+	}
 }
