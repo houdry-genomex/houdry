@@ -32,9 +32,10 @@ const (
 	certPerm   = 0o644
 
 	// ALPNHoudry is advertised by GPU workers that present a node certificate.
-	// The control plane only sends CertificateRequest when it sees this (or a
-	// non-browser ClientHello). Chromium/Electron on Windows otherwise aborts
-	// TLS 1.3 + optional client-auth with "tls: bad record MAC".
+	// The control plane only sends CertificateRequest when it sees this ALPN.
+	// Agent uses Node https / Python httpx (no GREASE, often h2+http/1.1) —
+	// requesting a client cert from those stacks is what logs
+	// "tls: bad record MAC" from the other laptop.
 	ALPNHoudry = "houdry"
 	alpnHTTP11 = "http/1.1"
 )
@@ -299,22 +300,17 @@ func (b *Bundle) TLSConfig(verify func(raw [][]byte, verified [][]*x509.Certific
 
 func clientWantsNodeMTLS(hello *tls.ClientHelloInfo) bool {
 	if hello == nil {
-		return true
+		return false
 	}
 	for _, proto := range hello.SupportedProtos {
 		if proto == ALPNHoudry {
 			return true
 		}
 	}
-	// Chromium/Electron always GREASE the ClientHello (RFC 8701). Go GPU
-	// workers and Python httpx do not — keep requesting a cert for them so
-	// 0.6.11 `gpu register` still presents its node certificate.
-	for _, id := range hello.CipherSuites {
-		if id&0x0f0f == 0x0a0a {
-			return false
-		}
-	}
-	return true
+	// Node https, Python httpx, Chromium, and curl never advertise this ALPN.
+	// Do not RequestClientCert for them — that handshake is what prints
+	// "tls: bad record MAC" on Windows Agent probes.
+	return false
 }
 
 // ClientTLSConfig builds an mTLS client that trusts this CA and presents certPEM/keyPEM.

@@ -2,7 +2,7 @@
 
 One HTTPS listener (`--listen`, default `0.0.0.0:8080`; desktop `18080`). There is no HTTP fallback on that port.
 
-TLS 1.3, HTTP/1.1 only (HTTP/2 is disabled on the listener). GPU workers advertise ALPN `houdry` and the listener then requests an optional client certificate. Agent / Electron / Chromium ClientHellos (GREASE) never see `CertificateRequest` — that combination is what logged `tls: bad record MAC` from the other laptop on every chat/refresh.
+TLS 1.3, HTTP/1.1 only (HTTP/2 is disabled on the listener). The listener sends `CertificateRequest` **only** when the client advertises ALPN `houdry` (GPU `houdry gpu register` / node cert). Agent (Electron `https.get`, Python httpx) does not advertise that ALPN, so it never sees optional client-auth — that is what produced `tls: bad record MAC` on the control plane from the other laptop. Node APIs still require a CA-signed client cert on the HTTP request (`checkNodeCert`); skipping `CertificateRequest` for Agent does not open join/claim/result.
 
 A presented **Houdry-issued** cert must be unexpired and not revoked. Node APIs (join, heartbeat, claim, result) additionally require that cert to be signed by the Houdry Root CA and to match a node. OpenAI `/v1` does not require a client cert.
 

@@ -195,7 +195,7 @@ func publicKeysEqual(a, b crypto.PublicKey) bool {
 	return bytes.Equal(da, db)
 }
 
-func TestTLSConfigSkipsClientCertForBrowserHello(t *testing.T) {
+func TestTLSConfigRequestsClientCertOnlyForHoudryALPN(t *testing.T) {
 	b, err := Ensure(t.TempDir(), time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -208,15 +208,29 @@ func TestTLSConfigSkipsClientCertForBrowserHello(t *testing.T) {
 		t.Fatal("missing GetConfigForClient")
 	}
 
+	// Electron Node `https.get` / Python httpx: h2+http/1.1, no houdry ALPN,
+	// usually no GREASE. 0.6.12 still requested a client cert here and the
+	// HP serve log filled with "tls: bad record MAC" from the Agent laptop.
 	agent, err := cfg.GetConfigForClient(&tls.ClientHelloInfo{
 		SupportedProtos: []string{"h2", "http/1.1"},
-		CipherSuites:    []uint16{0x0a0a, 0x1301}, // GREASE + TLS_AES_128_GCM_SHA256
+		CipherSuites:    []uint16{0x1301},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if agent.ClientAuth != tls.NoClientCert {
-		t.Fatalf("browser ClientAuth=%v", agent.ClientAuth)
+		t.Fatalf("Agent-like ClientAuth=%v", agent.ClientAuth)
+	}
+
+	chrome, err := cfg.GetConfigForClient(&tls.ClientHelloInfo{
+		SupportedProtos: []string{"h2", "http/1.1"},
+		CipherSuites:    []uint16{0x0a0a, 0x1301},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chrome.ClientAuth != tls.NoClientCert {
+		t.Fatalf("browser ClientAuth=%v", chrome.ClientAuth)
 	}
 
 	gpu, err := cfg.GetConfigForClient(&tls.ClientHelloInfo{
@@ -228,17 +242,6 @@ func TestTLSConfigSkipsClientCertForBrowserHello(t *testing.T) {
 	}
 	if gpu.ClientAuth != tls.RequestClientCert {
 		t.Fatalf("houdry ALPN ClientAuth=%v", gpu.ClientAuth)
-	}
-
-	legacy, err := cfg.GetConfigForClient(&tls.ClientHelloInfo{
-		SupportedProtos: []string{"h2", "http/1.1"},
-		CipherSuites:    []uint16{0x1301},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if legacy.ClientAuth != tls.RequestClientCert {
-		t.Fatalf("Go GPU without GREASE ClientAuth=%v", legacy.ClientAuth)
 	}
 }
 
