@@ -282,6 +282,16 @@ func (b *Bundle) TLSConfig(verify func(raw [][]byte, verified [][]*x509.Certific
 			// requireNodeCert). HTTP/2 is disabled on the http.Server.
 			ClientAuth: tls.NoClientCert,
 			NextProtos: []string{alpnHTTP11},
+			// Session ticket keys are random per-process (Go has no way to
+			// persist/rotate them across restarts here). `houdry serve` gets
+			// restarted often during setup/upgrades; a client (Agent's Node
+			// TLS stack) that cached a ticket from the OLD process and tries
+			// to resume it against the NEW process cannot be decrypted —
+			// the new process logs exactly "local error: tls: bad record
+			// MAC" for what looks like a fresh, unrelated connection. Force
+			// a full handshake every time so a restart can never produce
+			// this class of failure.
+			SessionTicketsDisabled: true,
 		}
 		if requestNodeCert {
 			cfg.ClientAuth = tls.RequestClientCert

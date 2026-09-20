@@ -243,6 +243,13 @@ func TestTLSConfigRequestsClientCertOnlyForHoudryALPN(t *testing.T) {
 	if gpu.ClientAuth != tls.RequestClientCert {
 		t.Fatalf("houdry ALPN ClientAuth=%v", gpu.ClientAuth)
 	}
+	for name, c := range map[string]*tls.Config{"agent": agent, "chrome": chrome, "gpu": gpu} {
+		if !c.SessionTicketsDisabled {
+			t.Fatalf("%s: session tickets enabled — a client that resumes a ticket issued by a prior "+
+				"`houdry serve` process cannot be decrypted by this one, and Go logs that as "+
+				"\"tls: bad record MAC\" on an otherwise-unrelated fresh connection", name)
+		}
+	}
 }
 
 func TestClientTLSAdvertisesHoudryALPNWithNodeCert(t *testing.T) {
