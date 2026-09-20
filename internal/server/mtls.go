@@ -77,11 +77,27 @@ func mtlsClient(caPEM, certPEM, keyPEM []byte) (*http.Client, error) {
 		return nil, err
 	}
 	return &http.Client{
-		Timeout: 20 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: cfg,
-		},
+		Timeout:   20 * time.Second,
+		Transport: http1TLSTransport(cfg),
 	}, nil
+}
+
+// http1TLSTransport is HTTP/1.1 only. Go's default Transport prepends ALPN
+// "h2" onto TLSClientConfig.NextProtos; combined with a client certificate
+// that produces "tls: bad record MAC" on the control plane (Acer houdry.exe
+// GPU worker → HP serve), even though PowerShell /healthz (no h2, no cert)
+// succeeds.
+func http1TLSTransport(cfg *tls.Config) *http.Transport {
+	if cfg != nil {
+		cfg = cfg.Clone()
+	}
+	return &http.Transport{
+		TLSClientConfig:     cfg,
+		ForceAttemptHTTP2:   false,
+		TLSNextProto:        map[string]func(authority string, c *tls.Conn) http.RoundTripper{},
+		MaxIdleConnsPerHost: 1,
+		IdleConnTimeout:     30 * time.Second,
+	}
 }
 
 func caOnlyClient(caPEM []byte) (*http.Client, error) {
@@ -178,8 +194,8 @@ func (s *Server) checkNodeCert(w http.ResponseWriter, r *http.Request, allowSusp
 
 func tlsHTTPClient(cfg *tls.Config) *http.Client {
 	return &http.Client{
-		Timeout: 20 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: cfg},
+		Timeout:   20 * time.Second,
+		Transport: http1TLSTransport(cfg),
 	}
 }
 
@@ -343,12 +359,11 @@ func caVerifiesServer(ctx context.Context, serverURL string, caPEM []byte) bool 
 func FetchCA(ctx context.Context, serverURL string) ([]byte, error) {
 	c := &http.Client{
 		Timeout: 20 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, // TOFU: pin the PEM after this fetch
-				MinVersion:         tls.VersionTLS13,
-			},
-		},
+		Transport: http1TLSTransport(&tls.Config{
+			InsecureSkipVerify: true, // TOFU: pin the PEM after this fetch
+			MinVersion:         tls.VersionTLS13,
+			NextProtos:         []string{"http/1.1"},
+		}),
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(HTTPSURL(serverURL), "/")+"/v1/pki/ca", nil)
 	if err != nil {

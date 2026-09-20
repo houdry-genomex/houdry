@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,6 +22,21 @@ func testInv(id string) gpu.Inventory {
 			Index: 0, ID: "gpu-" + id, Vendor: gpu.VendorNVIDIA,
 			Name: "RTX", MemoryTotalBytes: 4 << 30, Source: "test",
 		}},
+	}
+}
+
+func TestHTTP1TLSTransportDisablesHTTP2(t *testing.T) {
+	tr := http1TLSTransport(&tls.Config{NextProtos: []string{pki.ALPNHoudry, "http/1.1"}})
+	if tr.ForceAttemptHTTP2 {
+		t.Fatal("ForceAttemptHTTP2 must be false — Go otherwise prepends ALPN h2")
+	}
+	if tr.TLSNextProto == nil {
+		t.Fatal("nil TLSNextProto auto-enables HTTP/2")
+	}
+	for _, p := range tr.TLSClientConfig.NextProtos {
+		if p == "h2" {
+			t.Fatalf("ALPN offers h2: %v", tr.TLSClientConfig.NextProtos)
+		}
 	}
 }
 

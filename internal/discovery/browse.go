@@ -74,7 +74,12 @@ func probeJSON(ctx context.Context, url string) bool {
 		client = &http.Client{
 			Timeout: 1500 * time.Millisecond,
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // discovery reachability; identity is mTLS later
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, // discovery reachability; identity is mTLS later
+					NextProtos:         []string{"http/1.1"},
+				},
+				ForceAttemptHTTP2: false,
+				TLSNextProto:      map[string]func(authority string, c *tls.Conn) http.RoundTripper{},
 			},
 		}
 	}
