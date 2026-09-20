@@ -132,6 +132,7 @@ func http1TLSServer(addr string, handler http.Handler, tlsCfg *tls.Config) *http
 		Handler:      handler,
 		TLSConfig:    tlsCfg,
 		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
+		ErrorLog:     tlsHandshakeLogger(),
 	}
 }
 

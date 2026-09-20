@@ -8,7 +8,8 @@ TLS 1.3, HTTP/1.1 only (HTTP/2 is disabled on the listener), session tickets dis
 
 1. **CertificateRequest sent to a non-GPU client** (0.6.13). Agent's TLS stacks (Electron `https.get`, Python httpx) don't handle the plane's optional client-cert request the way Go/GPU workers do.
 2. **Session-ticket resumption across a `houdry serve` restart** (0.6.14). Go's TLS session-ticket keys are random per process. A client that cached a ticket from a *previous* serve process and tries to resume it against a newly-started one cannot have that ticket decrypted. Disabling session tickets forces a full handshake on every connection.
-3. **GPU `houdry.exe` HTTP/2 + client certificate** (0.6.15). `net/http.Transport` prepends ALPN `h2` even when the GPU client only asked for `houdry` + `http/1.1`. The plane then sees `houdry` and sends `CertificateRequest`; that mix decrypts as `bad record MAC`. Confirmed on the Acer laptop: `/healthz` from PowerShell succeeded, while four `houdry.exe` sockets to `:18080` matched the error bursts. GPU and CA-fetch clients now force HTTP/1.1 (`ForceAttemptHTTP2: false` and a non-nil empty `TLSNextProto`).
+3. **GPU `houdry.exe` HTTP/2 + client certificate** (0.6.15). `net/http.Transport` prepends ALPN `h2` even when the GPU client only asked for `houdry` + `http/1.1`. GPU and CA-fetch clients now force HTTP/1.1.
+4. **Canceled extra sockets from Agent** (0.6.16). Python/Electron open several TCP connections and abort some mid-handshake. Go logs those as `bad record MAC` even when a later connection succeeds (chat and GPU jobs work). `serve` no longer prints that aborted-handshake noise; `bad certificate`, revoked nodes, and other real TLS failures still go to stderr.
 
 A presented **Houdry-issued** cert must be unexpired and not revoked. Node APIs (join, heartbeat, claim, result) additionally require that cert to be signed by the Houdry Root CA and to match a node. OpenAI `/v1` does not require a client cert.
 
